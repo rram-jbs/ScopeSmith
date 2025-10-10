@@ -1,0 +1,75 @@
+name: Destroy AWS Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type "DESTROY" to confirm stack deletion'
+        required: true
+      environment:
+        description: 'Environment to destroy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  destroy-infrastructure:
+    name: Destroy CDK Stacks
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirmation }}" != "DESTROY" ]; then
+            echo "❌ Confirmation failed. Type 'DESTROY' to proceed."
+            exit 1
+          fi
+      
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install AWS CDK
+        run: npm install -g aws-cdk@latest
+      
+      - name: Install CDK dependencies
+        working-directory: ./cdk
+        run: pip install -r requirements.txt
+      
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-Destroy
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Empty S3 buckets (required before deletion)
+        run: |
+          aws s3 rm s3://scopesmith-templates-${{ secrets.AWS_ACCOUNT_ID }} --recursive || true
+          aws s3 rm s3://scopesmith-artifacts-${{ secrets.AWS_ACCOUNT_ID }} --recursive || true
+          aws s3 rm s3://scopesmith-frontend-${{ secrets.AWS_ACCOUNT_ID }} --recursive || true
+      
+      - name: Destroy CDK stacks
+        working-directory: ./cdk
+        run: |
+          cdk destroy --all --force
+          echo "✅ All stacks destroyed"

@@ -1,0 +1,47 @@
+{
+  "@aws-cdk/core:enableStackNameDuplicates": false,
+  "aws-cdk:enableDiffNoFail": true,
+  "@aws-cdk/core:stackRelativeExports": true,
+  "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+  "environment": "dev",
+  "project": "ScopeSmith",
+  "cloudwatch": {
+    "log_retention_days": {
+      "dev": 7,
+      "prod": 30
+    }
+  },
+  "lambda": {
+    "memory_sizes": {
+      "requirements_analyzer": 512,
+      "cost_calculator": 256,
+      "template_retriever": 256,
+      "powerpoint_generator": 1024,
+      "sow_generator": 1024,
+      "session_manager": 256
+    },
+    "timeouts": {
+      "requirements_analyzer": 60,
+      "cost_calculator": 30,
+      "template_retriever": 30,
+      "powerpoint_generator": 120,
+      "sow_generator": 120,
+      "session_manager": 30
+    }
+  },
+  "api": {
+    "rate_limits": {
+      "dev": {
+        "rate": 10,
+        "burst": 20
+      },
+      "prod": {
+        "rate": 50,
+        "burst": 100
+      }
+    }
+  },
+  "bedrock": {
+    "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+  }
+}

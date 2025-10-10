@@ -1,0 +1,44 @@
+name: Test Lambda Functions
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'lambda/**'
+  workflow_dispatch:
+
+jobs:
+  test-lambdas:
+    name: Run Lambda Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+      
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov boto3 moto
+      
+      - name: Run pytest
+        run: |
+          cd lambda
+          pytest tests/ \
+            --cov=. \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            -v
+      
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./lambda/coverage.xml
+          flags: lambdas
+        continue-on-error: true
