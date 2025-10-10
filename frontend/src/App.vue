@@ -25,9 +25,12 @@ const resetToForm = () => {
 <template>
   <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
     <header class="bg-white shadow-sm">
-      <div class="max-w-7xl mx-auto py-4 px-6">
-        <h1 class="text-2xl font-bold text-gray-900">ScopeSmith</h1>
-        <p class="text-sm text-gray-600">AI-Powered Proposal Generation</p>
+      <div class="max-w-7xl mx-auto py-4 px-6 flex items-center">
+        <img src="/logo.png" alt="ScopeSmith Logo" class="h-16 w-16 mr-4 object-cover rounded-full border-2 border-primary shadow-lg" style="object-position: center;" />
+        <div>
+          <h1 class="text-2xl font-bold text-gray-900">ScopeSmith</h1>
+          <p class="text-sm text-gray-600">AI-Powered Proposal Generation</p>
+        </div>
       </div>
     </header>
 
@@ -72,16 +75,5 @@ const resetToForm = () => {
 </template>
 
 <style scoped>
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #42b883aa);
-}
+/* Remove .logo class, rely on Tailwind for sizing and spacing */
 </style>
