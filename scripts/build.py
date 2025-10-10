@@ -17,7 +17,7 @@ def create_lambda_layer(name: str, requirements_file: str) -> None:
         "-t", str(layer_dir),
         "--platform", "manylinux2014_x86_64",
         "--implementation", "cp",
-        "--python", "3.12",
+        "--python-version", "3.12",
         "--only-binary=:all:"
     ], check=True)
 
@@ -38,7 +38,7 @@ def package_lambda_function(function_dir: str) -> None:
             "-t", build_dir,
             "--platform", "manylinux2014_x86_64",
             "--implementation", "cp",
-            "--python", "3.12",
+            "--python-version", "3.12",
             "--only-binary=:all:"
         ], check=True)
         
