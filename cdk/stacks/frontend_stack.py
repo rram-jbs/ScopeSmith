@@ -50,21 +50,14 @@ class FrontendStack(Stack):
                     http_status=404,
                     response_http_status=200,
                     response_page_path="/index.html"
+                ),
+                cloudfront.ErrorResponse(
+                    http_status=403,
+                    response_http_status=200,
+                    response_page_path="/index.html"
                 )
             ]
         )
-
-        # Add custom error responses for SPA routing
-        for error_code in [403, 404]:
-            distribution.add_behavior(
-                path_pattern="/*",
-                origin=origins.S3Origin(
-                    frontend_bucket,
-                    origin_access_identity=origin_identity
-                ),
-                viewer_protocol_policy=cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-                cache_policy=cloudfront.CachePolicy.CACHING_OPTIMIZED,
-            )
 
         # CloudFormation outputs
         CfnOutput(self, "FrontendBucketName",
