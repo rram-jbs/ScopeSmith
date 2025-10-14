@@ -47,15 +47,22 @@ def create_agent_action_group(bedrock_agent, agent_id, function_arn, action_grou
         
         # Add each property as a parameter
         for prop_name, prop_config in schema['properties'].items():
+            param_type = prop_config['type']
+            
+            # Convert 'object' type to 'string' since Bedrock only supports primitive types
+            if param_type == 'object':
+                param_type = 'string'
+            
             function_parameters[prop_name] = {
                 'description': prop_config.get('description', f'Parameter {prop_name}'),
-                'type': prop_config['type'],
+                'type': param_type,
                 'required': prop_name in schema.get('required', [])
             }
             
-            # Handle enum values if present
+            # Add enum values to description instead of as separate field
             if 'enum' in prop_config:
-                function_parameters[prop_name]['enum'] = prop_config['enum']
+                enum_values = ', '.join(prop_config['enum'])
+                function_parameters[prop_name]['description'] += f' (allowed values: {enum_values})'
         
         response = bedrock_agent.create_agent_action_group(
             agentId=agent_id,
@@ -79,6 +86,28 @@ def create_agent_action_group(bedrock_agent, agent_id, function_arn, action_grou
     except ClientError as e:
         print(f"Error creating action group {action_group_name}: {e}")
         return None
+
+def wait_for_agent_ready(bedrock_agent, agent_id, max_attempts=12, wait_time=10):
+    """Wait for agent to be in PREPARED or NOT_PREPARED state"""
+    for attempt in range(max_attempts):
+        try:
+            response = bedrock_agent.get_agent(agentId=agent_id)
+            agent_status = response['agent']['agentStatus']
+            print(f"Agent status (attempt {attempt + 1}): {agent_status}")
+            
+            if agent_status in ['PREPARED', 'NOT_PREPARED', 'FAILED']:
+                return agent_status
+            
+            if attempt < max_attempts - 1:
+                print(f"Waiting {wait_time} seconds for agent to be ready...")
+                time.sleep(wait_time)
+                
+        except ClientError as e:
+            print(f"Error checking agent status: {e}")
+            if attempt < max_attempts - 1:
+                time.sleep(wait_time)
+    
+    return None
 
 def prepare_agent(bedrock_agent, agent_id):
     """Prepare the agent for use"""
@@ -136,8 +165,8 @@ def main():
                         'description': 'Unique session identifier'
                     },
                     'requirements_data': {
-                        'type': 'object',
-                        'description': 'Analyzed requirements data'
+                        'type': 'string',
+                        'description': 'JSON string containing analyzed requirements data'
                     }
                 },
                 'required': ['session_id', 'requirements_data']
@@ -175,8 +204,8 @@ def main():
                         'description': 'Path to the PowerPoint template'
                     },
                     'proposal_data': {
-                        'type': 'object',
-                        'description': 'Proposal data for presentation generation'
+                        'type': 'string',
+                        'description': 'JSON string containing proposal data for presentation generation'
                     }
                 },
                 'required': ['session_id', 'template_path', 'proposal_data']
@@ -196,8 +225,8 @@ def main():
                         'description': 'Path to the SOW template'
                     },
                     'proposal_data': {
-                        'type': 'object',
-                        'description': 'Proposal data for SOW generation'
+                        'type': 'string',
+                        'description': 'JSON string containing proposal data for SOW generation'
                     }
                 },
                 'required': ['session_id', 'template_path', 'proposal_data']
@@ -224,6 +253,15 @@ def main():
         return
 
     print(f"Created Bedrock agent with ID: {agent_id}")
+
+    # Wait for agent to be ready before creating action groups
+    print("Waiting for agent to be ready...")
+    agent_status = wait_for_agent_ready(bedrock_agent, agent_id)
+    if not agent_status:
+        print("Agent did not reach ready state in time")
+        return
+    
+    print(f"Agent is ready with status: {agent_status}")
 
     # Create action groups for each Lambda function
     action_group_ids = {}
