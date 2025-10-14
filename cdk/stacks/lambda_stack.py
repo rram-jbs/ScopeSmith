@@ -129,7 +129,16 @@ class LambdaStack(Stack):
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
-            environment=common_environment,
+            environment={
+                **common_environment,
+                "REQUIREMENTS_ANALYZER_ARN": self.requirements_analyzer.function_arn,
+                "COST_CALCULATOR_ARN": self.cost_calculator.function_arn,
+                "TEMPLATE_RETRIEVER_ARN": self.template_retriever.function_arn,
+                "POWERPOINT_GENERATOR_ARN": self.powerpoint_generator.function_arn,
+                "SOW_GENERATOR_ARN": self.sow_generator.function_arn,
+                "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
+                "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name
+            },
             tracing=lambda_.Tracing.ACTIVE
         )
 
@@ -146,6 +155,36 @@ class LambdaStack(Stack):
         for func in [self.template_retriever, self.powerpoint_generator, self.sow_generator]:
             infra_stack.templates_bucket.grant_read(func)
             infra_stack.artifacts_bucket.grant_read_write(func)
+
+        # Grant session manager permission to invoke other Lambda functions
+        self.session_manager.add_to_role_policy(iam.PolicyStatement(
+            actions=["lambda:InvokeFunction"],
+            resources=[
+                self.requirements_analyzer.function_arn,
+                self.cost_calculator.function_arn,
+                self.template_retriever.function_arn,
+                self.powerpoint_generator.function_arn,
+                self.sow_generator.function_arn
+            ]
+        ))
+
+        # Grant requirements analyzer permission to invoke cost calculator
+        self.requirements_analyzer.add_to_role_policy(iam.PolicyStatement(
+            actions=["lambda:InvokeFunction"],
+            resources=[self.cost_calculator.function_arn]
+        ))
+
+        # Add cost calculator ARN to requirements analyzer environment
+        self.requirements_analyzer.add_environment("COST_CALCULATOR_ARN", self.cost_calculator.function_arn)
+
+        # Grant cost calculator permission to invoke template retriever
+        self.cost_calculator.add_to_role_policy(iam.PolicyStatement(
+            actions=["lambda:InvokeFunction"],
+            resources=[self.template_retriever.function_arn]
+        ))
+
+        # Add template retriever ARN to cost calculator environment
+        self.cost_calculator.add_environment("TEMPLATE_RETRIEVER_ARN", self.template_retriever.function_arn)
 
         # Create CloudWatch alarms for all functions
         for func, name in [
