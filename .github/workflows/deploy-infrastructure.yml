@@ -80,15 +80,6 @@ jobs:
           role-session-name: GitHubActions-CDKDeploy
           aws-region: ${{ env.AWS_REGION }}
       
-      - name: Verify AWS identity
-        run: |
-          aws sts get-caller-identity
-          echo "AWS Region: $AWS_REGION"
-      
-      - name: Bootstrap CDK
-        working-directory: ./cdk
-        run: cdk bootstrap aws://${{ secrets.AWS_ACCOUNT_ID }}/${{ env.AWS_REGION }}
-      
       - name: Synthesize CDK stacks
         working-directory: ./cdk
         run: cdk synth --all
