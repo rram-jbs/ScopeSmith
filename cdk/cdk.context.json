@@ -1,5 +1,4 @@
 {
-  "@aws-cdk/core:enableStackNameDuplicates": false,
   "aws-cdk:enableDiffNoFail": true,
   "@aws-cdk/core:stackRelativeExports": true,
   "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
