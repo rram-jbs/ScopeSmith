@@ -42,6 +42,21 @@ def create_bedrock_agent(bedrock_agent):
 def create_agent_action_group(bedrock_agent, agent_id, function_arn, action_group_name, description, schema):
     """Create an action group for the Bedrock agent with Lambda function"""
     try:
+        # Convert our schema to the format expected by Bedrock Agents
+        function_parameters = {}
+        
+        # Add each property as a parameter
+        for prop_name, prop_config in schema['properties'].items():
+            function_parameters[prop_name] = {
+                'description': prop_config.get('description', f'Parameter {prop_name}'),
+                'type': prop_config['type'],
+                'required': prop_name in schema.get('required', [])
+            }
+            
+            # Handle enum values if present
+            if 'enum' in prop_config:
+                function_parameters[prop_name]['enum'] = prop_config['enum']
+        
         response = bedrock_agent.create_agent_action_group(
             agentId=agent_id,
             agentVersion="DRAFT",
@@ -55,7 +70,7 @@ def create_agent_action_group(bedrock_agent, agent_id, function_arn, action_grou
                     {
                         'name': action_group_name.lower(),
                         'description': description,
-                        'parameters': schema
+                        'parameters': function_parameters
                     }
                 ]
             }
