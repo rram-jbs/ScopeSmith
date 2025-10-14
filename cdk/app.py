@@ -10,7 +10,7 @@ app = App()
 # Define environment
 env = Environment(
     account=app.account,
-    region=app.region or "us-west-2"
+    region=app.region or "us-east-1"
 )
 
 # Create stacks with dependencies
