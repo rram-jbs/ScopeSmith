@@ -17,14 +17,6 @@ class LambdaStack(Stack):
     def __init__(self, scope: Construct, id: str, infra_stack: InfrastructureStack, **kwargs) -> None:
         super().__init__(scope, id, **kwargs)
 
-        # Create shared Lambda layer for document processing
-        document_processing_layer = lambda_.LayerVersion(
-            self, "DocumentProcessingLayer",
-            code=lambda_.Code.from_asset("cdk/layers/document_processing"),
-            compatible_runtimes=[lambda_.Runtime.PYTHON_3_12],
-            description="Common libraries for document processing (python-pptx, python-docx)"
-        )
-
         # Common Lambda configurations
         common_environment = {
             "AWS_LAMBDA_FUNCTION_TIMEOUT": "60",
@@ -49,7 +41,7 @@ class LambdaStack(Stack):
         self.requirements_analyzer = lambda_.Function(
             self, "RequirementsAnalyzer",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/requirements_analyzer/build"),
+            code=lambda_.Code.from_asset("lambda/requirements_analyzer"),
             handler="app.handler",
             memory_size=512,
             timeout=Duration.seconds(60),
@@ -70,7 +62,7 @@ class LambdaStack(Stack):
         self.cost_calculator = lambda_.Function(
             self, "CostCalculator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/cost_calculator/build"),
+            code=lambda_.Code.from_asset("lambda/cost_calculator"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
@@ -85,7 +77,7 @@ class LambdaStack(Stack):
         self.template_retriever = lambda_.Function(
             self, "TemplateRetriever",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/template_retriever/build"),
+            code=lambda_.Code.from_asset("lambda/template_retriever"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
@@ -96,11 +88,11 @@ class LambdaStack(Stack):
             tracing=lambda_.Tracing.ACTIVE
         )
 
-        # PowerPoint Generator Lambda with document processing layer
+        # PowerPoint Generator Lambda
         self.powerpoint_generator = lambda_.Function(
             self, "PowerPointGenerator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/powerpoint_generator/build"),
+            code=lambda_.Code.from_asset("lambda/powerpoint_generator"),
             handler="app.handler",
             memory_size=1024,
             timeout=Duration.seconds(120),
@@ -109,15 +101,14 @@ class LambdaStack(Stack):
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
                 "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name
             },
-            layers=[document_processing_layer],
             tracing=lambda_.Tracing.ACTIVE
         )
 
-        # SOW Generator Lambda with document processing layer
+        # SOW Generator Lambda
         self.sow_generator = lambda_.Function(
             self, "SOWGenerator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/sow_generator/build"),
+            code=lambda_.Code.from_asset("lambda/sow_generator"),
             handler="app.handler",
             memory_size=1024,
             timeout=Duration.seconds(120),
@@ -126,7 +117,6 @@ class LambdaStack(Stack):
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
                 "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name
             },
-            layers=[document_processing_layer],
             tracing=lambda_.Tracing.ACTIVE
         )
 
@@ -134,7 +124,7 @@ class LambdaStack(Stack):
         self.session_manager = lambda_.Function(
             self, "SessionManager",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/session_manager/build"),
+            code=lambda_.Code.from_asset("lambda/session_manager"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
