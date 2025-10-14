@@ -34,7 +34,13 @@ jobs:
       
       - name: Install dependencies
         working-directory: ./frontend
-        run: npm ci
+        run: |
+          npm ci || {
+            echo "npm ci failed, clearing cache and reinstalling..."
+            rm -rf node_modules package-lock.json
+            npm cache clean --force
+            npm install
+          }
       
       - name: Download CDK outputs artifact
         uses: actions/download-artifact@v5
