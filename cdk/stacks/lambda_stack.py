@@ -30,10 +30,11 @@ class LambdaStack(Stack):
         def create_error_alarm(function: lambda_.Function, function_name: str):
             alarm = cloudwatch.Alarm(
                 self, f"{function_name}ErrorAlarm",
-                metric=function.metric_errors(),
+                metric=function.metric_errors(
+                    period=Duration.minutes(5)
+                ),
                 threshold=3,
-                evaluation_periods=1,
-                period=Duration.minutes(5)
+                evaluation_periods=1
             )
             alarm.add_alarm_action(cloudwatch_actions.SnsAction(alarm_topic))
 
