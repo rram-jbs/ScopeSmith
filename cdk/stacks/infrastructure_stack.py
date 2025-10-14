@@ -22,7 +22,9 @@ class InfrastructureStack(Stack):
                 type=dynamodb.AttributeType.STRING
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            point_in_time_recovery=True,
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True
+            ),
             removal_policy=RemovalPolicy.RETAIN,
             time_to_live_attribute="ttl"
         )
@@ -34,7 +36,9 @@ class InfrastructureStack(Stack):
                 type=dynamodb.AttributeType.STRING
             ),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            point_in_time_recovery=True,
+            point_in_time_recovery_specification=dynamodb.PointInTimeRecoverySpecification(
+                point_in_time_recovery_enabled=True
+            ),
             removal_policy=RemovalPolicy.RETAIN
         )
 
@@ -50,7 +54,7 @@ class InfrastructureStack(Stack):
                 allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.PUT],
                 allowed_origins=["*"],
                 allowed_headers=["*"],
-                max_age=Duration.days(1)
+                max_age=86400  # 1 day in seconds
             )]
         )
 
@@ -69,7 +73,7 @@ class InfrastructureStack(Stack):
                 allowed_methods=[s3.HttpMethods.GET, s3.HttpMethods.PUT],
                 allowed_origins=["*"],
                 allowed_headers=["*"],
-                max_age=Duration.days(1)
+                max_age=86400  # 1 day in seconds
             )]
         )
 
