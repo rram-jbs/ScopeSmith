@@ -53,10 +53,16 @@ class LambdaStack(Stack):
             tracing=lambda_.Tracing.ACTIVE
         )
         
-        # Grant Bedrock permissions
+        # Grant Bedrock permissions - foundation models don't include account ID
         self.requirements_analyzer.add_to_role_policy(iam.PolicyStatement(
-            actions=["bedrock:InvokeModel"],
-            resources=[f"arn:aws:bedrock:{self.region}:{self.account}:model/anthropic.claude-3*"]
+            actions=[
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+            ],
+            resources=[
+                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3*"
+            ]
         ))
 
         # Cost Calculator Lambda
