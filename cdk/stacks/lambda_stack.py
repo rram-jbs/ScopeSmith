@@ -41,7 +41,7 @@ class LambdaStack(Stack):
         self.requirements_analyzer = lambda_.Function(
             self, "RequirementsAnalyzer",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/requirements_analyzer"),
+            code=lambda_.Code.from_asset("../lambda/requirements_analyzer"),
             handler="app.handler",
             memory_size=512,
             timeout=Duration.seconds(60),
@@ -62,7 +62,7 @@ class LambdaStack(Stack):
         self.cost_calculator = lambda_.Function(
             self, "CostCalculator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/cost_calculator"),
+            code=lambda_.Code.from_asset("../lambda/cost_calculator"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
@@ -77,7 +77,7 @@ class LambdaStack(Stack):
         self.template_retriever = lambda_.Function(
             self, "TemplateRetriever",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/template_retriever"),
+            code=lambda_.Code.from_asset("../lambda/template_retriever"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
@@ -92,7 +92,7 @@ class LambdaStack(Stack):
         self.powerpoint_generator = lambda_.Function(
             self, "PowerPointGenerator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/powerpoint_generator"),
+            code=lambda_.Code.from_asset("../lambda/powerpoint_generator"),
             handler="app.handler",
             memory_size=1024,
             timeout=Duration.seconds(120),
@@ -108,7 +108,7 @@ class LambdaStack(Stack):
         self.sow_generator = lambda_.Function(
             self, "SOWGenerator",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/sow_generator"),
+            code=lambda_.Code.from_asset("../lambda/sow_generator"),
             handler="app.handler",
             memory_size=1024,
             timeout=Duration.seconds(120),
@@ -124,7 +124,7 @@ class LambdaStack(Stack):
         self.session_manager = lambda_.Function(
             self, "SessionManager",
             runtime=lambda_.Runtime.PYTHON_3_12,
-            code=lambda_.Code.from_asset("lambda/session_manager"),
+            code=lambda_.Code.from_asset("../lambda/session_manager"),
             handler="app.handler",
             memory_size=256,
             timeout=Duration.seconds(30),
