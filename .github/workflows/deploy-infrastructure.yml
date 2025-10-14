@@ -97,6 +97,20 @@ jobs:
             --progress events \
             --concurrency 3
       
+      - name: Extract CloudFormation outputs
+        id: get-outputs
+        working-directory: ./cdk
+        run: |
+          echo "api_url=$(jq -r '.ScopeSmithApi.ApiUrl // empty' cdk-outputs.json)" >> $GITHUB_OUTPUT
+          echo "cloudfront_url=$(jq -r '.ScopeSmithFrontend.CloudFrontDomainName // empty' cdk-outputs.json)" >> $GITHUB_OUTPUT
+          echo "sessions_table=$(jq -r '.ScopeSmithInfrastructure.SessionsTableName // empty' cdk-outputs.json)" >> $GITHUB_OUTPUT
+          echo "rate_sheets_table=$(jq -r '.ScopeSmithInfrastructure.RateSheetsTableName // empty' cdk-outputs.json)" >> $GITHUB_OUTPUT
+          echo "templates_bucket=$(jq -r '.ScopeSmithInfrastructure.TemplatesBucketName // empty' cdk-outputs.json)" >> $GITHUB_OUTPUT
+          
+          # Debug output
+          echo "CDK Outputs file contents:"
+          cat cdk-outputs.json
+      
       - name: Configure AgentCore
         working-directory: ./scripts
         run: |
@@ -123,16 +137,6 @@ jobs:
           name: cdk-outputs
           path: cdk/cdk-outputs.json
           retention-days: 30
-      
-      - name: Extract CloudFormation outputs
-        id: get-outputs
-        working-directory: ./cdk
-        run: |
-          echo "api_url=$(jq -r '.ScopeSmithAPI.ApiGatewayURL' cdk-outputs.json)" >> $GITHUB_OUTPUT
-          echo "cloudfront_url=$(jq -r '.ScopeSmithFrontend.CloudFrontURL' cdk-outputs.json)" >> $GITHUB_OUTPUT
-          echo "sessions_table=$(jq -r '.ScopeSmithInfra.SessionsTableName' cdk-outputs.json)" >> $GITHUB_OUTPUT
-          echo "rate_sheets_table=$(jq -r '.ScopeSmithInfra.RateSheetsTableName' cdk-outputs.json)" >> $GITHUB_OUTPUT
-          echo "templates_bucket=$(jq -r '.ScopeSmithInfra.TemplatesBucketName' cdk-outputs.json)" >> $GITHUB_OUTPUT
       
       - name: Display deployment summary
         run: |

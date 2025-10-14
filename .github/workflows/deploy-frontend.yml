@@ -52,23 +52,33 @@ jobs:
             npm install
           }
       
-      - name: Download CDK outputs artifact
-        uses: actions/download-artifact@v5
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v5
         with:
-          name: cdk-outputs
-          path: ./cdk
-        continue-on-error: true
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-FrontendDeploy
+          aws-region: ${{ env.AWS_REGION }}
       
       - name: Configure environment variables
         working-directory: ./frontend
         run: |
-          if [ -f ../cdk/cdk-outputs.json ]; then
-            API_URL=$(jq -r '.ScopeSmithAPI.ApiGatewayURL' ../cdk/cdk-outputs.json)
+          # Get API URL directly from CloudFormation stack
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ScopeSmithApi \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiUrl`].OutputValue' \
+            --output text 2>/dev/null || echo "")
+          
+          if [ -n "$API_URL" ] && [ "$API_URL" != "None" ]; then
             echo "VITE_API_BASE_URL=${API_URL}" > .env.production
+            echo "✅ Using API URL from CloudFormation: ${API_URL}"
           else
-            echo "⚠️  CDK outputs not found, using placeholder"
+            echo "⚠️  CDK stack not found, using placeholder"
             echo "VITE_API_BASE_URL=https://api.scopesmith.com" > .env.production
           fi
+          
+          # Show the environment file contents
+          echo "Environment configuration:"
+          cat .env.production
       
       - name: Lint code
         working-directory: ./frontend
@@ -88,13 +98,6 @@ jobs:
             exit 1
           fi
           echo "✅ Build successful: $(du -sh dist/)"
-      
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v5
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          role-session-name: GitHubActions-FrontendDeploy
-          aws-region: ${{ env.AWS_REGION }}
       
       - name: Get S3 bucket name
         id: get-bucket
