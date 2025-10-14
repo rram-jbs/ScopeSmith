@@ -20,8 +20,16 @@ class ApiStack(Stack):
             description="API for ScopeSmith proposal generation system",
             default_cors_preflight_options=apigateway.CorsOptions(
                 allow_origins=["*"],
-                allow_methods=["GET", "POST", "OPTIONS"],
-                allow_headers=["Content-Type", "X-Api-Key"]
+                allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+                allow_headers=[
+                    "Content-Type", 
+                    "X-Amz-Date", 
+                    "Authorization", 
+                    "X-Api-Key",
+                    "X-Amz-Security-Token",
+                    "X-Amz-User-Agent"
+                ],
+                allow_credentials=False
             ),
             deploy_options=apigateway.StageOptions(
                 stage_name="prod",
@@ -51,25 +59,9 @@ class ApiStack(Stack):
             "POST",
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
-                proxy=True,
-                integration_responses=[{
-                    "statusCode": "200",
-                    "responseParameters": {
-                        "method.response.header.Access-Control-Allow-Origin": "'*'"
-                    }
-                }]
+                proxy=True
             ),
-            api_key_required=True,
-            method_responses=[{
-                "statusCode": "200",
-                "responseParameters": {
-                    "method.response.header.Access-Control-Allow-Origin": True
-                }
-            }],
-            request_validator_options=apigateway.RequestValidatorOptions(
-                validate_request_body=True,
-                validate_request_parameters=True
-            )
+            api_key_required=False
         )
 
         # GET /api/agent-status/{session_id}
@@ -80,7 +72,7 @@ class ApiStack(Stack):
                 lambda_stack.session_manager,
                 proxy=True
             ),
-            api_key_required=True
+            api_key_required=False
         )
 
         # GET /api/results/{session_id}
@@ -91,7 +83,7 @@ class ApiStack(Stack):
                 lambda_stack.session_manager,
                 proxy=True
             ),
-            api_key_required=True
+            api_key_required=False
         )
 
         # POST /api/upload-template
@@ -102,7 +94,7 @@ class ApiStack(Stack):
                 lambda_stack.template_retriever,
                 proxy=True
             ),
-            api_key_required=True
+            api_key_required=False
         )
 
         # Create request validator

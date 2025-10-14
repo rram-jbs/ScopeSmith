@@ -56,20 +56,37 @@ def get_session_status(session_id):
         'updated_at': item['updated_at']['S']
     }
 
+def create_cors_response(status_code, body):
+    """Helper function to create response with CORS headers"""
+    return {
+        'statusCode': status_code,
+        'headers': {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
+            'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+            'Content-Type': 'application/json'
+        },
+        'body': json.dumps(body) if isinstance(body, dict) else body
+    }
+
 def handler(event, context):
     try:
         http_method = event['httpMethod']
         path = event['path']
         
+        # Handle preflight OPTIONS requests
+        if http_method == 'OPTIONS':
+            return create_cors_response(200, {'message': 'OK'})
+        
         if http_method == 'POST' and path == '/api/submit-assessment':
             body = json.loads(event['body'])
             session_id = create_session(
                 client_name=body['client_name'],
-                project_name=body['project_name'],
-                industry=body['industry'],
+                project_name=body.get('project_name', ''),
+                industry=body.get('industry', ''),
                 requirements=body['requirements'],
-                duration=body['duration'],
-                team_size=body['team_size']
+                duration=body.get('duration', ''),
+                team_size=body.get('team_size', 1)
             )
             
             # Start the workflow by invoking the requirements analyzer
@@ -83,61 +100,43 @@ def handler(event, context):
                 })
             )
             
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'session_id': session_id,
-                    'message': 'Assessment started'
-                })
-            }
+            return create_cors_response(200, {
+                'session_id': session_id,
+                'message': 'Assessment started'
+            })
             
         elif http_method == 'GET' and '/api/agent-status/' in path:
             session_id = event['pathParameters']['session_id']
             status = get_session_status(session_id)
             
             if status:
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps(status)
-                }
+                return create_cors_response(200, status)
             else:
-                return {
-                    'statusCode': 404,
-                    'body': json.dumps({
-                        'error': 'Session not found'
-                    })
-                }
+                return create_cors_response(404, {
+                    'error': 'Session not found'
+                })
                 
         elif http_method == 'GET' and '/api/results/' in path:
             session_id = event['pathParameters']['session_id']
             status = get_session_status(session_id)
             
             if status and status['document_urls']:
-                return {
-                    'statusCode': 200,
-                    'body': json.dumps({
-                        'powerpoint_url': next((url for url in status['document_urls'] if 'pptx' in url.lower()), None),
-                        'sow_url': next((url for url in status['document_urls'] if 'sow' in url.lower()), None),
-                        'cost_data': json.loads(status.get('cost_data', '{}'))
-                    })
-                }
+                return create_cors_response(200, {
+                    'powerpoint_url': next((url for url in status['document_urls'] if 'pptx' in url.lower()), None),
+                    'sow_url': next((url for url in status['document_urls'] if 'sow' in url.lower()), None),
+                    'cost_data': json.loads(status.get('cost_data', '{}'))
+                })
             else:
-                return {
-                    'statusCode': 404,
-                    'body': json.dumps({
-                        'error': 'No documents available yet'
-                    })
-                }
+                return create_cors_response(404, {
+                    'error': 'No documents available yet'
+                })
         
         elif http_method == 'POST' and path == '/api/upload-template':
             # Handle template upload
             if 'file' not in event['multiValueHeaders']:
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({
-                        'error': 'No file provided'
-                    })
-                }
+                return create_cors_response(400, {
+                    'error': 'No file provided'
+                })
                 
             # Process file upload using S3
             s3 = boto3.client('s3')
@@ -151,25 +150,16 @@ def handler(event, context):
                 Body=file_content
             )
             
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'message': 'Template uploaded successfully',
-                    'template_path': f'templates/{file_name}'
-                })
-            }
-        
-        return {
-            'statusCode': 404,
-            'body': json.dumps({
-                'error': 'Route not found'
+            return create_cors_response(200, {
+                'message': 'Template uploaded successfully',
+                'template_path': f'templates/{file_name}'
             })
-        }
+        
+        return create_cors_response(404, {
+            'error': 'Route not found'
+        })
         
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': str(e)
-            })
-        }
+        return create_cors_response(500, {
+            'error': str(e)
+        })
