@@ -59,6 +59,10 @@ def get_session_status(session_id):
 def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
     """Invoke the Bedrock Agent to start the AI-orchestrated workflow (Phase 2)"""
     try:
+        print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
+        print(f"[BEDROCK AGENT] Agent ID: {os.environ.get('BEDROCK_AGENT_ID', 'NOT_SET')}")
+        print(f"[BEDROCK AGENT] Agent Alias ID: {os.environ.get('BEDROCK_AGENT_ALIAS_ID', 'NOT_SET')}")
+        
         bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
         
         # Create the input text for the agent
@@ -85,6 +89,8 @@ Please perform the following tasks in sequence:
 
 Please coordinate these tasks intelligently and update the session status as you progress through each stage."""
 
+        print(f"[BEDROCK AGENT] Sending input text (length: {len(input_text)} chars)")
+        
         # Invoke the Bedrock Agent
         response = bedrock_agent_runtime.invoke_agent(
             agentId=os.environ['BEDROCK_AGENT_ID'],
@@ -93,10 +99,16 @@ Please coordinate these tasks intelligently and update the session status as you
             inputText=input_text
         )
         
+        print(f"[BEDROCK AGENT] ✓ Invocation successful for session: {session_id}")
+        print(f"[BEDROCK AGENT] Response type: {type(response)}")
+        print(f"[BEDROCK AGENT] Response keys: {response.keys() if hasattr(response, 'keys') else 'N/A'}")
+        print(f"[BEDROCK AGENT] Full response: {json.dumps(response, default=str, indent=2)}")
+        
         return response
         
     except Exception as e:
-        print(f"Error invoking Bedrock Agent: {str(e)}")
+        print(f"[BEDROCK AGENT] ✗ ERROR invoking Bedrock Agent for session {session_id}: {str(e)}")
+        print(f"[BEDROCK AGENT] Error type: {type(e).__name__}")
         # Update session with error status
         try:
             dynamodb = boto3.client('dynamodb')
@@ -111,8 +123,9 @@ Please coordinate these tasks intelligently and update the session status as you
                     ':ua': {'S': datetime.utcnow().isoformat()}
                 }
             )
-        except:
-            pass
+            print(f"[BEDROCK AGENT] Updated session {session_id} with ERROR status")
+        except Exception as update_error:
+            print(f"[BEDROCK AGENT] Failed to update session with error status: {str(update_error)}")
         raise e
 
 def create_cors_response(status_code, body):
@@ -150,15 +163,20 @@ def handler(event, context):
             
             # PHASE 2: Start the AI-orchestrated workflow using Bedrock Agent
             try:
+                # Phase 2: Invoke Bedrock Agent asynchronously
+                print(f"[SESSION] Phase 2: Invoking Bedrock Agent for session: {session_id}")
                 agent_response = invoke_bedrock_agent(
-                    session_id=session_id,
-                    client_name=body['client_name'],
-                    project_name=body.get('project_name', ''),
-                    industry=body.get('industry', ''),
-                    requirements=body['requirements'],
-                    duration=body.get('duration', ''),
-                    team_size=body.get('team_size', 1)
+                    session_id, 
+                    body['client_name'], 
+                    body.get('project_name', ''), 
+                    body.get('industry', ''), 
+                    body['requirements'], 
+                    body.get('duration', ''), 
+                    body.get('team_size', 1)
                 )
+                
+                print(f"[SESSION] ✓ Bedrock Agent invocation completed for session: {session_id}")
+                print(f"[SESSION] Agent response received: {json.dumps(agent_response, default=str, indent=2)}")
                 
                 # Update status to indicate AgentCore is processing
                 dynamodb = boto3.client('dynamodb')

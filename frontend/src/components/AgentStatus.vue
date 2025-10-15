@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { WORKFLOW_STAGES } from '@/utils/constants'
 import { usePolling } from '@/composables/usePolling'
 import LoadingSpinner from './LoadingSpinner.vue'
@@ -28,9 +28,11 @@ const currentStageIndex = computed(() => {
 })
 
 // Watch for completion and emit event
-if (isComplete) {
-  emit('complete')
-}
+watch(isComplete, (newValue) => {
+  if (newValue) {
+    emit('complete')
+  }
+})
 </script>
 
 <template>
