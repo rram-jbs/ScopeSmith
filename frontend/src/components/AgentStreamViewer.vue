@@ -42,6 +42,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useApi } from '../composables/useApi'
 
 const props = defineProps({
   sessionId: {
@@ -51,6 +52,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['complete', 'error'])
+
+const { get } = useApi()
 
 const events = ref([])
 const status = ref('STARTING')
@@ -115,14 +118,7 @@ const scrollToBottom = async () => {
 
 const fetchAgentStatus = async () => {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-    const response = await fetch(`${apiUrl}/api/agent-status/${props.sessionId}`)
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`)
-    }
-    
-    const data = await response.json()
+    const data = await get(`/api/agent-status/${props.sessionId}`)
     console.log('Agent status:', data)
     
     status.value = data.status || 'PROCESSING'

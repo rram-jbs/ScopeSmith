@@ -112,7 +112,10 @@
 
 <script setup>
 import { ref } from 'vue'
+import { useApi } from '../composables/useApi'
 import AgentStreamViewer from '../components/AgentStreamViewer.vue'
+
+const { post, get } = useApi()
 
 const currentView = ref('form') // 'form', 'processing', 'results'
 const sessionId = ref(null)
@@ -135,31 +138,14 @@ const submitAssessment = async () => {
   submitError.value = null
 
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-    
-    console.log('Submitting to:', `${apiUrl}/api/assessments`)
-    
-    const response = await fetch(`${apiUrl}/api/assessments`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        requirements: formData.value.requirements,
-        client_name: formData.value.clientName,
-        project_type: formData.value.projectType
-      })
+    const response = await post('/api/assessments', {
+      requirements: formData.value.requirements,
+      client_name: formData.value.clientName,
+      project_type: formData.value.projectType
     })
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      throw new Error(errorData.error || `HTTP ${response.status}`)
-    }
-
-    const data = await response.json()
-    console.log('Assessment created:', data)
-
-    sessionId.value = data.session_id
+    console.log('Assessment created:', response)
+    sessionId.value = response.session_id
 
     // Switch to processing view
     currentView.value = 'processing'
@@ -177,15 +163,10 @@ const handleAgentComplete = async (data) => {
   
   // Fetch document URLs
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
-    const response = await fetch(`${apiUrl}/api/results/${sessionId.value}`)
-    
-    if (response.ok) {
-      const results = await response.json()
-      documents.value = {
-        powerpoint: results.powerpoint_url,
-        sow: results.sow_url
-      }
+    const results = await get(`/api/results/${sessionId.value}`)
+    documents.value = {
+      powerpoint: results.powerpoint_url,
+      sow: results.sow_url
     }
   } catch (error) {
     console.error('Error fetching documents:', error)

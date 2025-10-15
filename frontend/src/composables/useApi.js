@@ -13,6 +13,35 @@ export function useApi() {
   const loading = ref(false)
   const error = ref(null)
 
+  // Generic methods
+  const post = async (endpoint, data) => {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.post(endpoint, data)
+      return response.data
+    } catch (err) {
+      error.value = err.response?.data?.message || 'Failed to post data'
+      throw error.value
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const get = async (endpoint) => {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await api.get(endpoint)
+      return response.data
+    } catch (err) {
+      error.value = err.response?.data?.message || 'Failed to fetch data'
+      throw error.value
+    } finally {
+      loading.value = false
+    }
+  }
+
   const submitAssessment = async (formData) => {
     loading.value = true
     error.value = null
@@ -83,6 +112,8 @@ export function useApi() {
   return {
     loading,
     error,
+    post,
+    get,
     submitAssessment,
     getAgentStatus,
     getResults,
