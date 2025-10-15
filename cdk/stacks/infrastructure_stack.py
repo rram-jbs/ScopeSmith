@@ -7,6 +7,7 @@ from aws_cdk import (
     CfnOutput,
     aws_dynamodb as dynamodb,
     aws_s3 as s3,
+    aws_iam as iam,
 )
 from constructs import Construct
 
@@ -77,6 +78,60 @@ class InfrastructureStack(Stack):
             )]
         )
 
+        # Create IAM Role for Bedrock Agent
+        self.bedrock_agent_role = iam.Role(
+            self, "BedrockAgentRole",
+            assumed_by=iam.ServicePrincipal("bedrock.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name("AmazonBedrockFullAccess")
+            ],
+            inline_policies={
+                "BedrockAgentPolicy": iam.PolicyDocument(
+                    statements=[
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=[
+                                "bedrock:InvokeModel",
+                                "bedrock:InvokeModelWithResponseStream",
+                                "bedrock:GetFoundationModel",
+                                "bedrock:ListFoundationModels"
+                            ],
+                            resources=["*"]
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=[
+                                "s3:GetObject",
+                                "s3:PutObject",
+                                "s3:ListBucket"
+                            ],
+                            resources=[
+                                f"arn:aws:s3:::scopesmith-templates-{self.account}-{self.region}",
+                                f"arn:aws:s3:::scopesmith-templates-{self.account}-{self.region}/*",
+                                f"arn:aws:s3:::scopesmith-artifacts-{self.account}-{self.region}",
+                                f"arn:aws:s3:::scopesmith-artifacts-{self.account}-{self.region}/*"
+                            ]
+                        ),
+                        iam.PolicyStatement(
+                            effect=iam.Effect.ALLOW,
+                            actions=[
+                                "dynamodb:GetItem",
+                                "dynamodb:PutItem",
+                                "dynamodb:UpdateItem",
+                                "dynamodb:DeleteItem",
+                                "dynamodb:Query",
+                                "dynamodb:Scan"
+                            ],
+                            resources=[
+                                self.sessions_table.table_arn,
+                                self.rate_sheets_table.table_arn
+                            ]
+                        )
+                    ]
+                )
+            }
+        )
+
         # CloudFormation Outputs
         CfnOutput(self, "SessionsTableName",
             value=self.sessions_table.table_name,
@@ -100,4 +155,10 @@ class InfrastructureStack(Stack):
             value=self.artifacts_bucket.bucket_name,
             description="Artifacts S3 Bucket Name",
             export_name="ScopeSmithArtifactsBucketName"
+        )
+
+        CfnOutput(self, "BedrockAgentRoleArn",
+            value=self.bedrock_agent_role.role_arn,
+            description="Bedrock Agent IAM Role ARN",
+            export_name="ScopeSmithBedrockAgentRoleArn"
         )
