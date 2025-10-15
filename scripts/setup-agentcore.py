@@ -84,16 +84,37 @@ def create_gateway_role(iam_client, account_id):
 
 def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
     """Create AgentCore Gateway for Lambda functions"""
-    # Note: AgentCore Gateway APIs may not be available yet in all regions
-    # Using standard Bedrock Agent with custom configuration instead
     try:
-        # Try to create a custom agent that acts as a gateway
+        # Check if agent already exists first
+        print("  Checking for existing gateway agent...")
+        list_response = bedrock_agent.list_agents()
+        for agent in list_response.get('agentSummaries', []):
+            if agent['agentName'] == 'scopesmith-gateway-agent':
+                gateway_id = agent['agentId']
+                gateway_arn = f"arn:aws:bedrock:us-east-1:{boto3.client('sts').get_caller_identity()['Account']}:agent/{gateway_id}"
+                print(f"ℹ Gateway agent already exists")
+                print(f"  Gateway ARN: {gateway_arn}")
+                print(f"  Gateway ID: {gateway_id}")
+                return gateway_arn, gateway_id
+        
+        # Create new agent if it doesn't exist
+        print("  Creating new gateway agent...")
         response = bedrock_agent.create_agent(
             agentName='scopesmith-gateway-agent',
             description='ScopeSmith gateway agent for orchestrating Lambda functions',
             foundationModel='anthropic.claude-3-5-sonnet-20241022-v2:0',
-            instruction="""You are a gateway agent that routes requests to appropriate Lambda functions.
-            Your role is to intelligently decide which tools to call and in what order based on user requests.""",
+            instruction="""You are ScopeSmith, an AI assistant that helps generate professional project proposals.
+
+Your task is to convert client meeting notes into complete project proposals with PowerPoint presentations and Statement of Work documents.
+
+When given client requirements, you should:
+1. Use requirementsanalyzer to analyze and extract key information from the requirements
+2. Use costcalculator to calculate project costs based on the analyzed requirements
+3. Use templateretriever to find appropriate document templates
+4. Use powerpointgenerator to create a PowerPoint presentation with the proposal
+5. Use sowgenerator to create a Statement of Work document
+
+Always work through all steps in sequence. Pass the session_id between all tool calls.""",
             agentResourceRoleArn=gateway_role_arn,
             idleSessionTTLInSeconds=1800
         )
@@ -108,15 +129,7 @@ def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
         return gateway_arn, gateway_id
         
     except ClientError as e:
-        print(f"✗ Error creating gateway agent: {e}")
-        # Check if agent already exists
-        try:
-            list_response = bedrock_agent.list_agents()
-            for agent in list_response.get('agentSummaries', []):
-                if agent['agentName'] == 'scopesmith-gateway-agent':
-                    return agent['agentArn'], agent['agentId']
-        except:
-            pass
+        print(f"✗ Error with gateway agent: {e}")
         return None, None
 
 def add_gateway_target(bedrock_agent, gateway_id, target_name, function_arn, input_schema):
