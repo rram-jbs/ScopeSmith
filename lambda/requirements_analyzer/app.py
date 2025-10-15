@@ -5,44 +5,46 @@ from datetime import datetime
 
 def handler(event, context):
     try:
-        # Handle both direct Lambda invocation and AgentCore Gateway calls
-        if 'session_id' in event and 'requirements' in event:
-            session_id = event['session_id']
-            requirements = event['requirements']
+        print(f"[REQUIREMENTS ANALYZER] Received event: {json.dumps(event)}")
+        
+        # Check if this is a Bedrock Agent action group invocation
+        if 'agent' in event or 'actionGroup' in event or 'function' in event:
+            # This is a Bedrock Agent action group invocation
+            print(f"[REQUIREMENTS ANALYZER] Bedrock Agent action group invocation detected")
+            
+            # Extract parameters from Bedrock Agent format
+            parameters = event.get('parameters', [])
+            param_dict = {}
+            for param in parameters:
+                param_dict[param['name']] = param['value']
+            
+            session_id = param_dict.get('session_id')
+            requirements = param_dict.get('requirements')
+            
         elif 'inputText' in event:
-            # AgentCore Gateway invocation
+            # AgentCore Gateway invocation (legacy)
             try:
                 params = json.loads(event['inputText'])
                 session_id = params['session_id']
                 requirements = params['requirements']
             except (json.JSONDecodeError, KeyError) as e:
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({
-                        'error': f'Invalid input format from AgentCore: {str(e)}'
-                    })
-                }
+                return format_agent_response(400, f'Invalid input format: {str(e)}')
         else:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Missing required parameters: session_id and requirements'
-                })
-            }
+            # Direct invocation
+            session_id = event.get('session_id')
+            requirements = event.get('requirements')
 
-        print(f"[REQUIREMENTS ANALYZER] Starting requirements analysis")
-        print(f"[REQUIREMENTS ANALYZER] Event received: {json.dumps(event)}")
-        
+        if not session_id or not requirements:
+            return format_agent_response(400, 'Missing required parameters: session_id and requirements')
+
         print(f"[REQUIREMENTS ANALYZER] Session ID: {session_id}")
         print(f"[REQUIREMENTS ANALYZER] Requirements length: {len(requirements)} characters")
         
         # Initialize AWS clients
         bedrock = boto3.client('bedrock-runtime')
         dynamodb = boto3.client('dynamodb')
-        lambda_client = boto3.client('lambda')
         
-        # Update status to analyzing
-        print(f"[REQUIREMENTS ANALYZER] Updating session status to ANALYZING_REQUIREMENTS")
+        # Update status
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
             Key={'session_id': {'S': session_id}},
@@ -54,7 +56,7 @@ def handler(event, context):
             }
         )
         
-        # Call Claude 3.5 Sonnet to analyze requirements
+        # Call Claude to analyze requirements
         prompt = f"""Analyze these project requirements and extract key information. Return a JSON response with the following structure:
         {{
             "project_scope": "Description of what the project entails",
@@ -69,41 +71,22 @@ def handler(event, context):
         Requirements to analyze:
         {requirements}"""
         
-        print(f"[REQUIREMENTS ANALYZER] Invoking Bedrock model: {os.environ.get('BEDROCK_MODEL_ID', 'NOT_SET')}")
-        print(f"[REQUIREMENTS ANALYZER] Prompt length: {len(prompt)} characters")
-        
         response = bedrock.invoke_model(
             modelId=os.environ['BEDROCK_MODEL_ID'],
             contentType='application/json',
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 2000,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt
-                    }
-                ]
+                "messages": [{"role": "user", "content": prompt}]
             })
         )
-        
-        print(f"[REQUIREMENTS ANALYZER] Bedrock response received successfully")
         
         result = json.loads(response['body'].read().decode())
         analysis_content = result.get('content', [{}])[0].get('text', '{}')
         
-        print(f"[REQUIREMENTS ANALYZER] Analysis content length: {len(analysis_content)} characters")
-        print(f"[REQUIREMENTS ANALYZER] Raw analysis content: {analysis_content[:500]}...")
-        
-        # Parse the analysis result
         try:
             analysis_result = json.loads(analysis_content)
-            print(f"[REQUIREMENTS ANALYZER] Successfully parsed JSON analysis result")
-            print(f"[REQUIREMENTS ANALYZER] Analysis keys: {list(analysis_result.keys())}")
-        except json.JSONDecodeError as e:
-            print(f"[REQUIREMENTS ANALYZER] WARNING: Failed to parse JSON from Claude response: {str(e)}")
-            print(f"[REQUIREMENTS ANALYZER] Using fallback analysis result")
-            # Fallback if Claude didn't return valid JSON
+        except json.JSONDecodeError:
             analysis_result = {
                 "project_scope": "Requirements analysis completed",
                 "deliverables": ["Custom software solution"],
@@ -114,8 +97,7 @@ def handler(event, context):
                 "key_risks": ["Scope changes"]
             }
         
-        # Update DynamoDB with analysis results
-        print(f"[REQUIREMENTS ANALYZER] Updating DynamoDB with analysis results")
+        # Update DynamoDB
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
             Key={'session_id': {'S': session_id}},
@@ -127,61 +109,37 @@ def handler(event, context):
                 ':ua': {'S': datetime.utcnow().isoformat()}
             }
         )
-        print(f"[REQUIREMENTS ANALYZER] Session status updated to REQUIREMENTS_ANALYZED")
         
-        # Invoke cost calculator with the analysis results
-        if os.environ.get('COST_CALCULATOR_ARN'):
-            print(f"[REQUIREMENTS ANALYZER] Invoking cost calculator: {os.environ['COST_CALCULATOR_ARN']}")
-            lambda_client.invoke(
-                FunctionName=os.environ['COST_CALCULATOR_ARN'],
-                InvocationType='Event',
-                Payload=json.dumps({
-                    'session_id': session_id,
-                    'requirements_data': analysis_result
-                })
-            )
-            print(f"[REQUIREMENTS ANALYZER] Cost calculator invoked successfully")
-        else:
-            print(f"[REQUIREMENTS ANALYZER] WARNING: COST_CALCULATOR_ARN not set, skipping cost calculation")
-        
-        print(f"[REQUIREMENTS ANALYZER] Analysis complete for session: {session_id}")
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'session_id': session_id,
-                'message': 'Requirements analysis complete',
-                'analysis_result': analysis_result
-            })
-        }
+        # Return in Bedrock Agent action group format
+        return format_agent_response(200, {
+            'session_id': session_id,
+            'message': 'Requirements analysis complete',
+            'analysis_result': analysis_result
+        })
         
     except Exception as e:
-        print(f"[REQUIREMENTS ANALYZER] ERROR: Analysis failed with exception: {str(e)}")
-        print(f"[REQUIREMENTS ANALYZER] ERROR: Exception type: {type(e).__name__}")
-        import traceback
-        print(f"[REQUIREMENTS ANALYZER] ERROR: Traceback:\n{traceback.format_exc()}")
-        
-        # Update session with error status
-        try:
-            print(f"[REQUIREMENTS ANALYZER] Updating session with error status")
-            dynamodb = boto3.client('dynamodb')
-            dynamodb.update_item(
-                TableName=os.environ['SESSIONS_TABLE_NAME'],
-                Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={
-                    ':status': {'S': 'ERROR'},
-                    ':error': {'S': f'Requirements analysis failed: {str(e)}'},
-                    ':ua': {'S': datetime.utcnow().isoformat()}
+        print(f"[REQUIREMENTS ANALYZER] ERROR: {str(e)}")
+        return format_agent_response(500, f'Analysis failed: {str(e)}')
+
+def format_agent_response(status_code, body):
+    """Format response for Bedrock Agent action group"""
+    if isinstance(body, dict):
+        body_text = json.dumps(body)
+    else:
+        body_text = str(body)
+    
+    # Bedrock Agent expects this specific format
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': 'RequirementsAnalyzer',
+            'apiPath': '/analyze',
+            'httpMethod': 'POST',
+            'httpStatusCode': status_code,
+            'responseBody': {
+                'application/json': {
+                    'body': body_text
                 }
-            )
-            print(f"[REQUIREMENTS ANALYZER] Session error status updated successfully")
-        except Exception as db_error:
-            print(f"[REQUIREMENTS ANALYZER] ERROR: Failed to update session error status: {str(db_error)}")
-            
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': str(e)
-            })
+            }
         }
+    }

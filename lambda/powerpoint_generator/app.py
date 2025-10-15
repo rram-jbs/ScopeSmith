@@ -8,8 +8,23 @@ from pptx.util import Inches, Pt
 
 def handler(event, context):
     try:
-        # Handle AgentCore Gateway calls only
-        if 'inputText' in event:
+        print(f"[POWERPOINT] Received event: {json.dumps(event)}")
+        
+        # Check if this is a Bedrock Agent action group invocation
+        if 'agent' in event or 'actionGroup' in event or 'function' in event:
+            print(f"[POWERPOINT] Bedrock Agent action group invocation detected")
+            
+            parameters = event.get('parameters', [])
+            param_dict = {}
+            for param in parameters:
+                param_dict[param['name']] = param['value']
+            
+            session_id = param_dict.get('session_id')
+            template_path = param_dict.get('template_path')
+            proposal_data = param_dict.get('proposal_data')
+            if isinstance(proposal_data, str):
+                proposal_data = json.loads(proposal_data)
+        elif 'inputText' in event:
             try:
                 params = json.loads(event['inputText'])
                 session_id = params['session_id']
@@ -18,19 +33,9 @@ def handler(event, context):
                 if isinstance(proposal_data, str):
                     proposal_data = json.loads(proposal_data)
             except (json.JSONDecodeError, KeyError) as e:
-                return {
-                    'statusCode': 400,
-                    'body': json.dumps({
-                        'error': f'Invalid input format from AgentCore: {str(e)}'
-                    })
-                }
+                return format_agent_response(400, f'Invalid input format from AgentCore: {str(e)}')
         else:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Missing required parameters'
-                })
-            }
+            return format_agent_response(400, 'Missing required parameters')
 
         print(f"[POWERPOINT] Generating presentation for session: {session_id}")
         
@@ -91,19 +96,34 @@ def handler(event, context):
             }
         )
         
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'session_id': session_id,
-                'message': 'PowerPoint generated successfully',
-                'document_url': presigned_url
-            })
-        }
+        return format_agent_response(200, {
+            'session_id': session_id,
+            'message': 'PowerPoint generated successfully',
+            'document_url': presigned_url
+        })
         
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': str(e)
-            })
+        print(f"[POWERPOINT] ERROR: {str(e)}")
+        return format_agent_response(500, f'PowerPoint generation failed: {str(e)}')
+
+def format_agent_response(status_code, body):
+    """Format response for Bedrock Agent action group"""
+    if isinstance(body, dict):
+        body_text = json.dumps(body)
+    else:
+        body_text = str(body)
+    
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': 'PowerPointGenerator',
+            'apiPath': '/generate',
+            'httpMethod': 'POST',
+            'httpStatusCode': status_code,
+            'responseBody': {
+                'application/json': {
+                    'body': body_text
+                }
+            }
         }
+    }

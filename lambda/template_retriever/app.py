@@ -9,8 +9,20 @@ def handler(event, context):
     This function is invoked by the Bedrock Agent to retrieve appropriate templates
     """
     try:
-        # Handle AgentCore Gateway calls only
-        if 'inputText' in event:
+        print(f"[TEMPLATE RETRIEVER] Received event: {json.dumps(event)}")
+        
+        # Check if this is a Bedrock Agent action group invocation
+        if 'agent' in event or 'actionGroup' in event or 'function' in event:
+            print(f"[TEMPLATE RETRIEVER] Bedrock Agent action group invocation detected")
+            
+            parameters = event.get('parameters', [])
+            param_dict = {}
+            for param in parameters:
+                param_dict[param['name']] = param['value']
+            
+            session_id = param_dict.get('session_id')
+            template_type = param_dict.get('template_type', 'both')
+        elif 'inputText' in event:
             try:
                 params = json.loads(event['inputText'])
                 session_id = params['session_id']
@@ -23,12 +35,11 @@ def handler(event, context):
                     })
                 }
         else:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Missing required parameters: session_id'
-                })
-            }
+            session_id = event.get('session_id')
+            template_type = event.get('template_type', 'both')
+
+        if not session_id:
+            return format_agent_response(400, 'Missing required parameter: session_id')
 
         print(f"[TEMPLATE RETRIEVER] Starting template retrieval for session: {session_id}")
         print(f"[TEMPLATE RETRIEVER] Template type requested: {template_type}")
@@ -140,40 +151,38 @@ def handler(event, context):
         )
         
         # Return response in AgentCore format
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'session_id': session_id,
-                'message': 'Templates retrieved successfully',
-                'templates': selected_templates,
-                'next_action': 'Templates have been selected. You can now proceed with document generation (SOW and/or PowerPoint).'
-            })
-        }
+        return format_agent_response(200, {
+            'session_id': session_id,
+            'message': 'Templates retrieved successfully',
+            'templates': selected_templates,
+            'next_action': 'Templates have been selected. You can now proceed with document generation (SOW and/or PowerPoint).'
+        })
         
     except Exception as e:
-        # Update session with error status
-        try:
-            dynamodb = boto3.client('dynamodb')
-            dynamodb.update_item(
-                TableName=os.environ['SESSIONS_TABLE_NAME'],
-                Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={
-                    ':status': {'S': 'ERROR'},
-                    ':error': {'S': f'Template retrieval failed: {str(e)}'},
-                    ':ua': {'S': datetime.utcnow().isoformat()}
+        print(f"[TEMPLATE RETRIEVER] ERROR: {str(e)}")
+        return format_agent_response(500, f'Template retrieval failed: {str(e)}')
+
+def format_agent_response(status_code, body):
+    """Format response for Bedrock Agent action group"""
+    if isinstance(body, dict):
+        body_text = json.dumps(body)
+    else:
+        body_text = str(body)
+    
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': 'TemplateRetriever',
+            'apiPath': '/retrieve',
+            'httpMethod': 'POST',
+            'httpStatusCode': status_code,
+            'responseBody': {
+                'application/json': {
+                    'body': body_text
                 }
-            )
-        except:
-            pass
-            
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': f'Template retrieval failed: {str(e)}'
-            })
+            }
         }
+    }
 
 def select_best_templates(templates, requirements_data, cost_data):
     """Select the most appropriate templates based on project characteristics"""

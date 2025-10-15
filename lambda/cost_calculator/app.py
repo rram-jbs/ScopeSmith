@@ -71,8 +71,22 @@ def calculate_project_cost(requirements_data):
 
 def handler(event, context):
     try:
-        # Handle AgentCore Gateway calls only
-        if 'inputText' in event:
+        print(f"[COST CALCULATOR] Received event: {json.dumps(event)}")
+        
+        # Check if this is a Bedrock Agent action group invocation
+        if 'agent' in event or 'actionGroup' in event or 'function' in event:
+            print(f"[COST CALCULATOR] Bedrock Agent action group invocation detected")
+            
+            parameters = event.get('parameters', [])
+            param_dict = {}
+            for param in parameters:
+                param_dict[param['name']] = param['value']
+            
+            session_id = param_dict.get('session_id')
+            requirements_data = param_dict.get('requirements_data')
+            if isinstance(requirements_data, str):
+                requirements_data = json.loads(requirements_data)
+        elif 'inputText' in event:
             try:
                 params = json.loads(event['inputText'])
                 session_id = params['session_id']
@@ -87,12 +101,7 @@ def handler(event, context):
                     })
                 }
         else:
-            return {
-                'statusCode': 400,
-                'body': json.dumps({
-                    'error': 'Missing required parameters: session_id and requirements_data'
-                })
-            }
+            return format_agent_response(400, 'Missing required parameters')
 
         print(f"[COST CALCULATOR] Starting cost calculation for session: {session_id}")
         
@@ -145,18 +154,14 @@ def handler(event, context):
         )
         
         # Return response in AgentCore format
-        return {
-            'statusCode': 200,
-            'body': json.dumps({
-                'session_id': session_id,
-                'message': 'Cost calculation completed successfully',
-                'cost_result': cost_result,
-                'next_action': 'Costs have been calculated. You can now proceed with template retrieval and document generation.'
-            })
-        }
+        return format_agent_response(200, {
+            'session_id': session_id,
+            'message': 'Cost calculation completed successfully',
+            'cost_result': cost_result
+        })
         
     except Exception as e:
-        # Update session with error status
+        print(f"[COST CALCULATOR] ERROR: {str(e)}")
         try:
             dynamodb = boto3.client('dynamodb')
             dynamodb.update_item(
@@ -173,9 +178,26 @@ def handler(event, context):
         except:
             pass
             
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
-                'error': f'Cost calculation failed: {str(e)}'
-            })
+        return format_agent_response(500, f'Cost calculation failed: {str(e)}')
+
+def format_agent_response(status_code, body):
+    """Format response for Bedrock Agent action group"""
+    if isinstance(body, dict):
+        body_text = json.dumps(body)
+    else:
+        body_text = str(body)
+    
+    return {
+        'messageVersion': '1.0',
+        'response': {
+            'actionGroup': 'CostCalculator',
+            'apiPath': '/calculate',
+            'httpMethod': 'POST',
+            'httpStatusCode': status_code,
+            'responseBody': {
+                'application/json': {
+                    'body': body_text
+                }
+            }
         }
+    }
