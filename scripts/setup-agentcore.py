@@ -102,7 +102,7 @@ def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
         response = bedrock_agent.create_agent(
             agentName='scopesmith-gateway-agent',
             description='ScopeSmith gateway agent for orchestrating Lambda functions',
-            foundationModel='anthropic.claude-3-5-sonnet-20241022-v2:0',
+            foundationModel='us.anthropic.claude-3-5-sonnet-20241022-v2:0',  # Use inference profile
             instruction="""You are ScopeSmith, an AI assistant that helps generate professional project proposals.
 
 Your task is to convert client meeting notes into complete project proposals with PowerPoint presentations and Statement of Work documents.
