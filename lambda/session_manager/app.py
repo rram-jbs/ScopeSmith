@@ -66,85 +66,185 @@ def invoke_bedrock_agent(session_id, client_name, project_name, industry, requir
     if not agent_id or not agent_alias_id:
         raise ValueError("Bedrock Agent not configured. Please run setup-agentcore.py script.")
     
+    if agent_id == 'PLACEHOLDER_AGENT_ID' or agent_alias_id == 'PLACEHOLDER_ALIAS_ID':
+        raise ValueError("Bedrock Agent placeholders detected. Please run setup-agentcore.py to configure actual agent.")
+    
     print(f"[BEDROCK AGENT] Agent ID: {agent_id}")
     print(f"[BEDROCK AGENT] Agent Alias ID: {agent_alias_id}")
     
     bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
     
-    # Create input text for agent
-    input_text = f"""Convert the following client meeting notes into a complete project proposal:
+    # Create input text for agent with clear instructions
+    input_text = f"""I need you to generate a complete project proposal for the following client:
 
 Client Information:
 - Client Name: {client_name}
 - Project Name: {project_name}
 - Industry: {industry}
-- Project Duration: {duration}
+- Desired Duration: {duration}
 - Team Size: {team_size}
 
-Meeting Notes:
+Meeting Notes/Requirements:
 {requirements}
 
 Session ID: {session_id}
 
-Please work autonomously to complete the full proposal workflow."""
+Please execute the following workflow:
+1. Analyze the requirements using the analyze_requirements function
+2. Calculate project costs using the calculate_project_cost function
+3. Retrieve appropriate templates using the retrieve_templates function
+4. Generate a PowerPoint presentation using the generate_powerpoint function
+5. Generate a Statement of Work document using the generate_sow function
 
-    print(f"[BEDROCK AGENT] Sending input to agent")
+Work autonomously through all steps and provide me with the final document URLs."""
+
+    print(f"[BEDROCK AGENT] Input text length: {len(input_text)} characters")
+    print(f"[BEDROCK AGENT] Invoking agent...")
     
-    response = bedrock_agent_runtime.invoke_agent(
-        agentId=agent_id,
-        agentAliasId=agent_alias_id,
-        sessionId=session_id,
-        inputText=input_text
-    )
-    
-    print(f"[BEDROCK AGENT] Agent invocation successful")
+    try:
+        response = bedrock_agent_runtime.invoke_agent(
+            agentId=agent_id,
+            agentAliasId=agent_alias_id,
+            sessionId=session_id,
+            inputText=input_text,
+            enableTrace=True  # Enable traces for debugging
+        )
+        
+        print(f"[BEDROCK AGENT] ✓ Agent invoked successfully")
+        print(f"[BEDROCK AGENT] Response keys: {list(response.keys())}")
+        
+    except Exception as e:
+        print(f"[BEDROCK AGENT] ✗ Failed to invoke agent: {str(e)}")
+        raise e
     
     # Process the EventStream
-    event_stream = response['completion']
+    event_stream = response.get('completion')
+    if not event_stream:
+        print(f"[BEDROCK AGENT] ✗ No completion event stream in response")
+        raise ValueError("No completion event stream received from agent")
+    
     full_response = ""
     tool_calls = []
+    action_group_invocations = 0
+    chunks_received = 0
     
     print(f"[BEDROCK AGENT] Processing EventStream...")
     
-    for event in event_stream:
-        if 'chunk' in event:
-            chunk = event['chunk']
-            if 'bytes' in chunk:
-                chunk_text = chunk['bytes'].decode('utf-8')
-                print(f"[CHUNK] {chunk_text}")
-                full_response += chunk_text
-        
-        elif 'trace' in event:
-            trace = event['trace']
-            print(f"[TRACE] {json.dumps(trace, default=str, indent=2)}")
+    try:
+        for event in event_stream:
+            # Handle text chunks from the agent
+            if 'chunk' in event:
+                chunk = event['chunk']
+                if 'bytes' in chunk:
+                    chunk_text = chunk['bytes'].decode('utf-8')
+                    chunks_received += 1
+                    print(f"[CHUNK #{chunks_received}] {chunk_text[:200]}{'...' if len(chunk_text) > 200 else ''}")
+                    full_response += chunk_text
             
-            # Track tool invocations
-            if 'trace' in trace:
-                trace_data = trace['trace']
-                if 'orchestrationTrace' in trace_data:
-                    orch = trace_data['orchestrationTrace']
-                    if 'invocationInput' in orch:
-                        tool_calls.append(orch['invocationInput'])
-                        print(f"[TOOL CALL] {json.dumps(orch['invocationInput'], default=str, indent=2)}")
-                    if 'observation' in orch:
-                        print(f"[TOOL RESPONSE] {json.dumps(orch['observation'], default=str, indent=2)}")
-        
-        elif 'returnControl' in event:
-            print(f"[RETURN_CONTROL] Agent requires user input")
-            return {
-                'status': 'awaiting_input',
-                'event': event['returnControl'],
-                'session_id': session_id
-            }
+            # Handle trace events (action group invocations, observations, etc.)
+            elif 'trace' in event:
+                trace = event['trace']
+                trace_obj = trace.get('trace', {})
+                
+                # Log orchestration trace for debugging
+                if 'orchestrationTrace' in trace_obj:
+                    orch_trace = trace_obj['orchestrationTrace']
+                    
+                    # Agent is invoking an action group
+                    if 'invocationInput' in orch_trace:
+                        invocation_input = orch_trace['invocationInput']
+                        action_group_invocations += 1
+                        
+                        action_group_name = invocation_input.get('actionGroupInvocationInput', {}).get('actionGroupName', 'Unknown')
+                        function_name = invocation_input.get('actionGroupInvocationInput', {}).get('function', 'Unknown')
+                        parameters = invocation_input.get('actionGroupInvocationInput', {}).get('parameters', [])
+                        
+                        print(f"[TOOL CALL #{action_group_invocations}] Action Group: {action_group_name}")
+                        print(f"[TOOL CALL #{action_group_invocations}] Function: {function_name}")
+                        print(f"[TOOL CALL #{action_group_invocations}] Parameters: {json.dumps(parameters, indent=2)}")
+                        
+                        tool_calls.append({
+                            'action_group': action_group_name,
+                            'function': function_name,
+                            'parameters': parameters
+                        })
+                    
+                    # Agent received response from action group
+                    if 'observation' in orch_trace:
+                        observation = orch_trace['observation']
+                        
+                        if 'actionGroupInvocationOutput' in observation:
+                            output = observation['actionGroupInvocationOutput']
+                            response_text = output.get('text', '')
+                            print(f"[TOOL RESPONSE] {response_text[:300]}{'...' if len(response_text) > 300 else ''}")
+                        
+                        if 'finalResponse' in observation:
+                            final_resp = observation['finalResponse']
+                            print(f"[FINAL RESPONSE] {json.dumps(final_resp, indent=2)}")
+                    
+                    # Agent rationale/reasoning
+                    if 'rationale' in orch_trace:
+                        rationale = orch_trace['rationale']
+                        print(f"[AGENT REASONING] {rationale.get('text', '')}")
+                
+                # Log model invocation traces
+                if 'modelInvocationInput' in trace_obj:
+                    model_input = trace_obj['modelInvocationInput']
+                    print(f"[MODEL INPUT] {model_input.get('text', '')[:200]}...")
+                
+                if 'modelInvocationOutput' in trace_obj:
+                    model_output = trace_obj['modelInvocationOutput']
+                    print(f"[MODEL OUTPUT] Parsed response received")
+            
+            # Handle return control events (agent needs user input)
+            elif 'returnControl' in event:
+                return_control = event['returnControl']
+                print(f"[RETURN CONTROL] Agent requires user input")
+                print(f"[RETURN CONTROL] {json.dumps(return_control, indent=2)}")
+                
+                return {
+                    'status': 'awaiting_input',
+                    'event': return_control,
+                    'session_id': session_id,
+                    'partial_response': full_response,
+                    'tool_calls': tool_calls
+                }
+            
+            # Handle errors in the stream
+            elif 'internalServerException' in event:
+                error = event['internalServerException']
+                print(f"[ERROR] Internal server error: {error}")
+                raise Exception(f"Bedrock agent internal error: {error}")
+            
+            elif 'validationException' in event:
+                error = event['validationException']
+                print(f"[ERROR] Validation error: {error}")
+                raise Exception(f"Bedrock agent validation error: {error}")
+            
+            elif 'throttlingException' in event:
+                error = event['throttlingException']
+                print(f"[ERROR] Throttling error: {error}")
+                raise Exception(f"Bedrock agent throttling error: {error}")
     
-    print(f"[BEDROCK AGENT] EventStream processing complete")
-    print(f"[BEDROCK AGENT] Full response length: {len(full_response)} chars")
-    print(f"[BEDROCK AGENT] Total tool calls: {len(tool_calls)}")
+    except Exception as stream_error:
+        print(f"[BEDROCK AGENT] ✗ Error processing event stream: {str(stream_error)}")
+        raise stream_error
+    
+    print(f"[BEDROCK AGENT] ✓ EventStream processing complete")
+    print(f"[BEDROCK AGENT] Chunks received: {chunks_received}")
+    print(f"[BEDROCK AGENT] Full response length: {len(full_response)} characters")
+    print(f"[BEDROCK AGENT] Total tool calls: {action_group_invocations}")
+    
+    # Validate that we received meaningful output
+    if chunks_received == 0 and action_group_invocations == 0:
+        print(f"[BEDROCK AGENT] ⚠ Warning: No chunks or tool calls received from agent")
     
     return {
         'status': 'completed',
         'response': full_response,
         'tool_calls': tool_calls,
+        'action_group_invocations': action_group_invocations,
+        'chunks_received': chunks_received,
         'session_id': session_id
     }
 
@@ -172,6 +272,13 @@ def handler(event, context):
         
         if http_method == 'POST' and path == '/api/submit-assessment':
             body = json.loads(event['body'])
+            
+            # Validate required fields
+            if 'client_name' not in body or 'requirements' not in body:
+                return create_cors_response(400, {
+                    'error': 'Missing required fields: client_name and requirements'
+                })
+            
             session_id = create_session(
                 client_name=body['client_name'],
                 project_name=body.get('project_name', ''),
@@ -181,8 +288,13 @@ def handler(event, context):
                 team_size=body.get('team_size', 1)
             )
             
+            print(f"[SESSION] Created session: {session_id}")
+            print(f"[SESSION] Client: {body['client_name']}")
+            print(f"[SESSION] Requirements length: {len(body['requirements'])} characters")
+            
             try:
                 print(f"[SESSION] Invoking Bedrock Agent for session: {session_id}")
+                
                 agent_response = invoke_bedrock_agent(
                     session_id, 
                     body['client_name'], 
@@ -194,27 +306,70 @@ def handler(event, context):
                 )
                 
                 print(f"[SESSION] ✓ Bedrock Agent invocation completed")
+                print(f"[SESSION] Response status: {agent_response.get('status')}")
+                print(f"[SESSION] Tool calls made: {agent_response.get('action_group_invocations', 0)}")
+                print(f"[SESSION] Response chunks: {agent_response.get('chunks_received', 0)}")
                 
-                # Update status
+                # Update status based on agent response
                 dynamodb = boto3.client('dynamodb')
+                
+                if agent_response.get('status') == 'completed':
+                    status_value = 'AGENT_PROCESSING'
+                elif agent_response.get('status') == 'awaiting_input':
+                    status_value = 'AWAITING_INPUT'
+                else:
+                    status_value = 'AGENT_PROCESSING'
+                
                 dynamodb.update_item(
                     TableName=os.environ['SESSIONS_TABLE_NAME'],
                     Key={'session_id': {'S': session_id}},
-                    UpdateExpression='SET #status = :status, updated_at = :ua',
+                    UpdateExpression='SET #status = :status, agent_response = :ar, updated_at = :ua',
                     ExpressionAttributeNames={'#status': 'status'},
                     ExpressionAttributeValues={
-                        ':status': {'S': 'AGENT_PROCESSING'},
+                        ':status': {'S': status_value},
+                        ':ar': {'S': json.dumps({
+                            'response': agent_response.get('response', ''),
+                            'tool_calls': agent_response.get('tool_calls', []),
+                            'action_group_invocations': agent_response.get('action_group_invocations', 0)
+                        })},
                         ':ua': {'S': datetime.utcnow().isoformat()}
                     }
                 )
                 
                 return create_cors_response(200, {
                     'session_id': session_id,
-                    'message': 'Assessment started with Bedrock Agent'
+                    'message': 'Assessment started with Bedrock Agent',
+                    'status': agent_response.get('status'),
+                    'tool_calls': agent_response.get('action_group_invocations', 0)
+                })
+                
+            except ValueError as ve:
+                print(f"[SESSION] ✗ Configuration error: {str(ve)}")
+                
+                # Update session with configuration error
+                dynamodb = boto3.client('dynamodb')
+                dynamodb.update_item(
+                    TableName=os.environ['SESSIONS_TABLE_NAME'],
+                    Key={'session_id': {'S': session_id}},
+                    UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': {'S': 'CONFIGURATION_ERROR'},
+                        ':error': {'S': str(ve)},
+                        ':ua': {'S': datetime.utcnow().isoformat()}
+                    }
+                )
+                
+                return create_cors_response(500, {
+                    'session_id': session_id,
+                    'error': 'Agent configuration error. Please run setup script.',
+                    'details': str(ve)
                 })
                 
             except Exception as e:
                 print(f"[SESSION] ✗ Bedrock Agent invocation failed: {str(e)}")
+                import traceback
+                print(f"[SESSION] Traceback: {traceback.format_exc()}")
                 
                 # Update session with error
                 dynamodb = boto3.client('dynamodb')
@@ -234,7 +389,7 @@ def handler(event, context):
                     'session_id': session_id,
                     'error': str(e)
                 })
-            
+        
         elif http_method == 'GET' and '/api/agent-status/' in path:
             session_id = event['pathParameters']['session_id']
             status = get_session_status(session_id)

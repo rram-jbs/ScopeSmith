@@ -142,7 +142,9 @@ class LambdaStack(Stack):
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
                 "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name,
                 "AGENTCORE_RUNTIME_ARN": "PLACEHOLDER_RUNTIME_ARN",
-                "AGENTCORE_RUNTIME_ID": "PLACEHOLDER_RUNTIME_ID"
+                "AGENTCORE_RUNTIME_ID": "PLACEHOLDER_RUNTIME_ID",
+                "BEDROCK_AGENT_ID": "PLACEHOLDER_AGENT_ID",
+                "BEDROCK_AGENT_ALIAS_ID": "PLACEHOLDER_ALIAS_ID"
             },
             tracing=lambda_.Tracing.ACTIVE
         )
@@ -170,6 +172,20 @@ class LambdaStack(Stack):
             ],
             resources=[
                 f"arn:aws:bedrock:{self.region}:{self.account}:agent-runtime/*"
+            ]
+        ))
+
+        # Grant session manager Bedrock Agent permissions
+        self.session_manager.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "bedrock:InvokeAgent",
+                "bedrock:GetAgent",
+                "bedrock:ListAgents",
+                "bedrock:InvokeAgentRuntime"
+            ],
+            resources=[
+                f"arn:aws:bedrock:{self.region}:{self.account}:agent/*",
+                f"arn:aws:bedrock:{self.region}:{self.account}:agent-alias/*/*"
             ]
         ))
 
