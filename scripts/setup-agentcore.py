@@ -110,7 +110,7 @@ def create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction):
         agent_response = bedrock_agent.create_agent(
             agentName="ScopeSmithAgent",
             description="AI agent for analyzing project requirements and generating scopes of work",
-            roleArn=agent_role_arn,
+            agentResourceRoleArn=agent_role_arn,  # Fixed: changed from roleArn to agentResourceRoleArn
             foundationModel="us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Using inference profile
             instruction=agent_instruction,
             idleSessionTTLInSeconds=1800  # 30 minutes
