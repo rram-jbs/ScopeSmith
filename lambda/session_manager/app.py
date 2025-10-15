@@ -2,7 +2,9 @@ import os
 import json
 import boto3
 import uuid
+import time
 from datetime import datetime
+from botocore.exceptions import ClientError
 
 def create_session(client_name, project_name, industry, requirements, duration, team_size):
     session_id = str(uuid.uuid4())
@@ -59,7 +61,7 @@ def get_session_status(session_id):
     }
 
 def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
-    """Invoke Bedrock Agent and return streaming events"""
+    """Invoke Bedrock Agent with retry logic for throttling"""
     print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
     
     agent_id = os.environ.get('BEDROCK_AGENT_ID')
@@ -102,24 +104,38 @@ Please execute the following workflow:
 Work autonomously through all steps and provide me with the final document URLs."""
 
     print(f"[BEDROCK AGENT] Input text length: {len(input_text)} characters")
-    print(f"[BEDROCK AGENT] Invoking agent...")
     
-    try:
-        response = bedrock_agent_runtime.invoke_agent(
-            agentId=agent_id,
-            agentAliasId=agent_alias_id,
-            sessionId=session_id,
-            inputText=input_text,
-            enableTrace=True
-        )
-        
-        print(f"[BEDROCK AGENT] ✓ Agent invoked successfully")
-        
-    except Exception as e:
-        print(f"[BEDROCK AGENT] ✗ Failed to invoke agent: {str(e)}")
-        raise e
+    max_retries = 3
+    retry_delay = 2  # seconds
     
-    # Process the EventStream and store events in DynamoDB for frontend polling
+    for attempt in range(max_retries):
+        try:
+            print(f"[BEDROCK AGENT] Invoking agent (attempt {attempt + 1}/{max_retries})...")
+            
+            response = bedrock_agent_runtime.invoke_agent(
+                agentId=agent_id,
+                agentAliasId=agent_alias_id,
+                sessionId=session_id,
+                inputText=input_text,
+                enableTrace=True
+            )
+            
+            print(f"[BEDROCK AGENT] ✓ Agent invoked successfully")
+            break  # Success, exit retry loop
+            
+        except ClientError as e:
+            error_code = e.response['Error']['Code']
+            
+            if error_code == 'ThrottlingException' and attempt < max_retries - 1:
+                wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
+                print(f"[BEDROCK AGENT] ⚠ Throttled, waiting {wait_time}s before retry...")
+                time.sleep(wait_time)
+                continue
+            else:
+                print(f"[BEDROCK AGENT] ✗ Failed to invoke agent: {str(e)}")
+                raise e
+    
+    # Process the EventStream with throttling handling
     event_stream = response.get('completion')
     if not event_stream:
         print(f"[BEDROCK AGENT] ✗ No completion event stream in response")
@@ -130,12 +146,13 @@ Work autonomously through all steps and provide me with the final document URLs.
     action_group_invocations = 0
     chunks_received = 0
     agent_events = []
+    last_update_time = time.time()
+    update_interval = 1.0  # Update DynamoDB at most once per second to avoid throttling
     
     print(f"[BEDROCK AGENT] Processing EventStream...")
     
     try:
         for event in event_stream:
-            # Handle text chunks from the agent
             if 'chunk' in event:
                 chunk = event['chunk']
                 if 'bytes' in chunk:
@@ -144,23 +161,35 @@ Work autonomously through all steps and provide me with the final document URLs.
                     print(f"[CHUNK #{chunks_received}] {chunk_text[:200]}{'...' if len(chunk_text) > 200 else ''}")
                     full_response += chunk_text
                     
-                    # Store chunk event
                     agent_events.append({
                         'type': 'chunk',
                         'timestamp': datetime.utcnow().isoformat(),
                         'content': chunk_text
                     })
+                    
+                    # Batch update to reduce DynamoDB write frequency
+                    if time.time() - last_update_time > update_interval:
+                        try:
+                            dynamodb.update_item(
+                                TableName=os.environ['SESSIONS_TABLE_NAME'],
+                                Key={'session_id': {'S': session_id}},
+                                UpdateExpression='SET agent_events = :events, updated_at = :ua',
+                                ExpressionAttributeValues={
+                                    ':events': {'S': json.dumps(agent_events)},
+                                    ':ua': {'S': datetime.utcnow().isoformat()}
+                                }
+                            )
+                            last_update_time = time.time()
+                        except ClientError as db_error:
+                            print(f"[BEDROCK AGENT] ⚠ DynamoDB update failed: {db_error}")
             
-            # Handle trace events (action group invocations, observations, etc.)
             elif 'trace' in event:
                 trace = event['trace']
                 trace_obj = trace.get('trace', {})
                 
-                # Log orchestration trace for debugging
                 if 'orchestrationTrace' in trace_obj:
                     orch_trace = trace_obj['orchestrationTrace']
                     
-                    # Agent is invoking an action group
                     if 'invocationInput' in orch_trace:
                         invocation_input = orch_trace['invocationInput']
                         action_group_invocations += 1
@@ -170,7 +199,6 @@ Work autonomously through all steps and provide me with the final document URLs.
                         parameters = invocation_input.get('actionGroupInvocationInput', {}).get('parameters', [])
                         
                         print(f"[TOOL CALL #{action_group_invocations}] Action Group: {action_group_name}")
-                        print(f"[TOOL CALL #{action_group_invocations}] Function: {function_name}")
                         
                         tool_call_event = {
                             'type': 'tool_call',
@@ -183,19 +211,23 @@ Work autonomously through all steps and provide me with the final document URLs.
                         agent_events.append(tool_call_event)
                         tool_calls.append(tool_call_event)
                         
-                        # Update DynamoDB with current progress
-                        dynamodb.update_item(
-                            TableName=os.environ['SESSIONS_TABLE_NAME'],
-                            Key={'session_id': {'S': session_id}},
-                            UpdateExpression='SET agent_events = :events, current_stage = :stage, updated_at = :ua',
-                            ExpressionAttributeValues={
-                                ':events': {'S': json.dumps(agent_events)},
-                                ':stage': {'S': action_group_name},
-                                ':ua': {'S': datetime.utcnow().isoformat()}
-                            }
-                        )
+                        # Update with rate limiting
+                        if time.time() - last_update_time > update_interval:
+                            try:
+                                dynamodb.update_item(
+                                    TableName=os.environ['SESSIONS_TABLE_NAME'],
+                                    Key={'session_id': {'S': session_id}},
+                                    UpdateExpression='SET agent_events = :events, current_stage = :stage, updated_at = :ua',
+                                    ExpressionAttributeValues={
+                                        ':events': {'S': json.dumps(agent_events)},
+                                        ':stage': {'S': action_group_name},
+                                        ':ua': {'S': datetime.utcnow().isoformat()}
+                                    }
+                                )
+                                last_update_time = time.time()
+                            except ClientError as db_error:
+                                print(f"[BEDROCK AGENT] ⚠ DynamoDB update failed: {db_error}")
                     
-                    # Agent received response from action group
                     if 'observation' in orch_trace:
                         observation = orch_trace['observation']
                         
@@ -220,7 +252,6 @@ Work autonomously through all steps and provide me with the final document URLs.
                                 'content': json.dumps(final_resp)
                             })
                     
-                    # Agent rationale/reasoning
                     if 'rationale' in orch_trace:
                         rationale = orch_trace['rationale']
                         reasoning_text = rationale.get('text', '')
@@ -231,19 +262,17 @@ Work autonomously through all steps and provide me with the final document URLs.
                             'timestamp': datetime.utcnow().isoformat(),
                             'content': reasoning_text
                         })
-                        
-                        # Update DynamoDB with reasoning
-                        dynamodb.update_item(
-                            TableName=os.environ['SESSIONS_TABLE_NAME'],
-                            Key={'session_id': {'S': session_id}},
-                            UpdateExpression='SET agent_events = :events, updated_at = :ua',
-                            ExpressionAttributeValues={
-                                ':events': {'S': json.dumps(agent_events)},
-                                ':ua': {'S': datetime.utcnow().isoformat()}
-                            }
-                        )
             
-            # Handle errors in the stream
+            elif 'throttlingException' in event:
+                print(f"[BEDROCK AGENT] ⚠ Throttled during event stream processing")
+                agent_events.append({
+                    'type': 'warning',
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'content': 'Rate limit reached, slowing down...'
+                })
+                time.sleep(2)  # Brief pause before continuing
+                continue
+            
             elif 'internalServerException' in event:
                 error = event['internalServerException']
                 print(f"[ERROR] Internal server error: {error}")
@@ -261,7 +290,39 @@ Work autonomously through all steps and provide me with the final document URLs.
     
     except Exception as stream_error:
         print(f"[BEDROCK AGENT] ✗ Error processing event stream: {str(stream_error)}")
+        
+        try:
+            dynamodb.update_item(
+                TableName=os.environ['SESSIONS_TABLE_NAME'],
+                Key={'session_id': {'S': session_id}},
+                UpdateExpression='SET #status = :status, error_message = :error, agent_events = :events, updated_at = :ua',
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={
+                    ':status': {'S': 'ERROR'},
+                    ':error': {'S': str(stream_error)},
+                    ':events': {'S': json.dumps(agent_events)},
+                    ':ua': {'S': datetime.utcnow().isoformat()}
+                }
+            )
+        except:
+            pass
+        
         raise stream_error
+    
+    try:
+        dynamodb.update_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}},
+            UpdateExpression='SET agent_events = :events, #status = :status, updated_at = :ua',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':events': {'S': json.dumps(agent_events)},
+                ':status': {'S': 'COMPLETED'},
+                ':ua': {'S': datetime.utcnow().isoformat()}
+            }
+        )
+    except ClientError as db_error:
+        print(f"[BEDROCK AGENT] ⚠ Final DynamoDB update failed: {db_error}")
     
     print(f"[BEDROCK AGENT] ✓ EventStream processing complete")
     
@@ -418,7 +479,7 @@ def handler(event, context):
                 })
         
         elif http_method == 'GET' and '/api/agent-status/' in path:
-            session_id = event['pathParameters']['session_id']
+            session_id = path.split('/')[-1]  # Extract session_id from path
             status = get_session_status(session_id)
             
             if status:
@@ -429,7 +490,7 @@ def handler(event, context):
                 })
                 
         elif http_method == 'GET' and '/api/results/' in path:
-            session_id = event['pathParameters']['session_id']
+            session_id = path.split('/')[-1]  # Extract session_id from path
             status = get_session_status(session_id)
             
             if status and status['document_urls']:

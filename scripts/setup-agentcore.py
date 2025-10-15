@@ -102,19 +102,40 @@ def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
         response = bedrock_agent.create_agent(
             agentName='scopesmith-gateway-agent',
             description='ScopeSmith gateway agent for orchestrating Lambda functions',
-            foundationModel='us.anthropic.claude-3-5-sonnet-20241022-v2:0',  # Use inference profile
+            foundationModel='us.anthropic.claude-3-5-sonnet-20241022-v2:0',
             instruction="""You are ScopeSmith, an AI assistant that helps generate professional project proposals.
 
 Your task is to convert client meeting notes into complete project proposals with PowerPoint presentations and Statement of Work documents.
 
-When given client requirements, you should:
-1. Use requirementsanalyzer to analyze and extract key information from the requirements
-2. Use costcalculator to calculate project costs based on the analyzed requirements
-3. Use templateretriever to find appropriate document templates
-4. Use powerpointgenerator to create a PowerPoint presentation with the proposal
-5. Use sowgenerator to create a Statement of Work document
+IMPORTANT: Work methodically and take your time between steps to avoid rate limits. Wait 3-5 seconds between each function call.
 
-Always work through all steps in sequence. Pass the session_id between all tool calls.""",
+When given client requirements, follow this workflow:
+
+Step 1: Analyze Requirements
+- Use requirementsanalyzer to extract key information from the requirements
+- Wait 5 seconds after this step completes
+
+Step 2: Calculate Costs
+- Use costcalculator to calculate project costs based on the analyzed requirements
+- Pass the requirements_data as a JSON string
+- Wait 5 seconds after this step completes
+
+Step 3: Retrieve Templates
+- Use templateretriever to find appropriate document templates
+- Specify template_type as 'both' to get PowerPoint and SOW templates
+- Wait 5 seconds after this step completes
+
+Step 4: Generate PowerPoint
+- Use powerpointgenerator to create the presentation
+- Use the template path from step 3
+- Wait 5 seconds after this step completes
+
+Step 5: Generate Statement of Work
+- Use sowgenerator to create the SOW document
+- Use the template path from step 3
+- Wait before returning final results
+
+Always pass the session_id between all tool calls. Work autonomously through all steps. If you encounter rate limiting, pause for 10 seconds and retry.""",
             agentResourceRoleArn=gateway_role_arn,
             idleSessionTTLInSeconds=1800
         )
