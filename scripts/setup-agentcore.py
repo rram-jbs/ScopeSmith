@@ -81,15 +81,24 @@ def grant_lambda_bedrock_permissions(iam_client, lambda_client, function_name, a
 def grant_agent_lambda_permissions(lambda_client, agent_id, function_arns):
     """Grant the Bedrock Agent permissions to invoke Lambda functions"""
     try:
+        # Get the current AWS account ID and region from one of the function ARNs
+        sample_arn = next(iter(function_arns.values()))
+        arn_parts = sample_arn.split(':')
+        account_id = arn_parts[4]
+        region = arn_parts[3]
+        
         for function_name, function_arn in function_arns.items():
             try:
                 # Add permission for Bedrock Agent to invoke the Lambda function
+                # Use specific account ID and region instead of wildcards
+                source_arn = f'arn:aws:bedrock:{region}:{account_id}:agent/{agent_id}'
+                
                 lambda_client.add_permission(
                     FunctionName=function_arn,
                     StatementId=f"bedrock-agent-{agent_id}-invoke-{function_name}",
                     Action='lambda:InvokeFunction',
                     Principal='bedrock.amazonaws.com',
-                    SourceArn=f'arn:aws:bedrock:*:*:agent/{agent_id}'
+                    SourceArn=source_arn
                 )
                 print(f"Granted invoke permission for {function_name} to Bedrock Agent")
             except ClientError as e:
@@ -211,6 +220,44 @@ def create_agent_alias(bedrock_agent, agent_id):
     except ClientError as e:
         print(f"Error creating agent alias: {e}")
         return None
+
+def check_existing_agent(bedrock_agent, agent_name="ScopeSmithAgent"):
+    """Check if an agent with the given name already exists"""
+    try:
+        response = bedrock_agent.list_agents()
+        for agent in response.get('agentSummaries', []):
+            if agent['agentName'] == agent_name:
+                print(f"Found existing agent: {agent_name} (ID: {agent['agentId']})")
+                return agent['agentId']
+        return None
+    except ClientError as e:
+        print(f"Error checking for existing agents: {e}")
+        return None
+
+def get_existing_agent_alias(bedrock_agent, agent_id, alias_name="prod"):
+    """Get existing agent alias if it exists"""
+    try:
+        response = bedrock_agent.list_agent_aliases(agentId=agent_id)
+        for alias in response.get('agentAliasSummaries', []):
+            if alias['agentAliasName'] == alias_name:
+                print(f"Found existing alias: {alias_name} (ID: {alias['agentAliasId']})")
+                return alias['agentAliasId']
+        return None
+    except ClientError as e:
+        print(f"Error checking for existing aliases: {e}")
+        return None
+
+def get_existing_action_groups(bedrock_agent, agent_id):
+    """Get existing action groups for the agent"""
+    try:
+        response = bedrock_agent.list_agent_action_groups(agentId=agent_id, agentVersion="DRAFT")
+        action_groups = {}
+        for ag in response.get('actionGroupSummaries', []):
+            action_groups[ag['actionGroupName']] = ag['actionGroupId']
+        return action_groups
+    except ClientError as e:
+        print(f"Error getting existing action groups: {e}")
+        return {}
 
 def main():
     # Initialize AWS clients
@@ -342,26 +389,33 @@ def main():
     
     print(f"Using Bedrock Agent Role ARN: {agent_role_arn}")
 
-    agent_instruction = """You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
-    You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
+    # Check if agent already exists
+    print("Checking for existing Bedrock Agent...")
+    agent_id = check_existing_agent(bedrock_agent, "ScopeSmithAgent")
     
-    Your capabilities include:
-    - Analyzing client requirements and breaking them down into deliverables
-    - Calculating project costs based on standard rate sheets
-    - Retrieving appropriate document templates
-    - Generating customized PowerPoint presentations
-    - Creating detailed Statements of Work
-    
-    Always maintain a professional tone and ensure all outputs are well-structured and comprehensive."""
+    if agent_id:
+        print(f"✅ Using existing agent with ID: {agent_id}")
+    else:
+        # Create new Bedrock Agent
+        agent_instruction = """You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
+        You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
+        
+        Your capabilities include:
+        - Analyzing client requirements and breaking them down into deliverables
+        - Calculating project costs based on standard rate sheets
+        - Retrieving appropriate document templates
+        - Generating customized PowerPoint presentations
+        - Creating detailed Statements of Work
+        
+        Always maintain a professional tone and ensure all outputs are well-structured and comprehensive."""
 
-    # Create Bedrock Agent
-    print("Creating Bedrock Agent...")
-    agent_id = create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction)
-    if not agent_id:
-        print("Failed to create Bedrock agent")
-        return
+        print("Creating new Bedrock Agent...")
+        agent_id = create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction)
+        if not agent_id:
+            print("Failed to create Bedrock agent")
+            return
 
-    print(f"Created Bedrock agent with ID: {agent_id}")
+        print(f"✅ Created new Bedrock agent with ID: {agent_id}")
 
     # Grant Lambda functions permission for Bedrock Agent to invoke them
     print("Granting Bedrock Agent permissions to invoke Lambda functions...")
@@ -376,23 +430,31 @@ def main():
     
     print(f"Agent is ready with status: {agent_status}")
 
-    # Create action groups for each Lambda function
+    # Check for existing action groups
+    print("Checking for existing action groups...")
+    existing_action_groups = get_existing_action_groups(bedrock_agent, agent_id)
+    
+    # Create action groups for each Lambda function (skip if already exists)
     action_group_ids = {}
     for function_name, function_data in lambda_functions.items():
-        print(f"Creating action group for {function_name}...")
-        action_group_id = create_agent_action_group(
-            bedrock_agent,
-            agent_id,
-            function_arns[function_name],
-            function_name,
-            function_data['description'],
-            function_data['schema']
-        )
-        if action_group_id:
-            action_group_ids[function_name] = action_group_id
-            print(f"Created action group for {function_name}: {action_group_id}")
+        if function_name in existing_action_groups:
+            print(f"✅ Action group for {function_name} already exists: {existing_action_groups[function_name]}")
+            action_group_ids[function_name] = existing_action_groups[function_name]
         else:
-            print(f"Failed to create action group for {function_name}")
+            print(f"Creating new action group for {function_name}...")
+            action_group_id = create_agent_action_group(
+                bedrock_agent,
+                agent_id,
+                function_arns[function_name],
+                function_name,
+                function_data['description'],
+                function_data['schema']
+            )
+            if action_group_id:
+                action_group_ids[function_name] = action_group_id
+                print(f"✅ Created action group for {function_name}: {action_group_id}")
+            else:
+                print(f"❌ Failed to create action group for {function_name}")
 
     # Prepare the agent
     print("Preparing agent...")
@@ -404,36 +466,43 @@ def main():
         print("Waiting for agent preparation to complete...")
         time.sleep(30)
         
-        # Create agent alias
-        print("Creating agent alias...")
-        alias_id = create_agent_alias(bedrock_agent, agent_id)
-        if alias_id:
-            print(f"Created agent alias: {alias_id}")
-            
-            # Update Session Manager with Agent details
-            print("Updating Session Manager with Bedrock Agent details...")
-            session_manager_function_name = session_manager_arn.split(':')[-1]
-            
-            if update_session_manager_environment(lambda_client, session_manager_function_name, agent_id, alias_id):
-                print("Successfully updated Session Manager environment variables")
-                
-                # Grant Session Manager permissions to invoke Bedrock Agent
-                print("Granting Session Manager permissions to invoke Bedrock Agent...")
-                grant_lambda_bedrock_permissions(iam_client, lambda_client, session_manager_function_name, agent_id, alias_id)
-                
-                print("🎉 Phase 2 AgentCore setup complete!")
-                print(f"✅ Agent ID: {agent_id}")
-                print(f"✅ Agent Alias ID: {alias_id}")
-                print(f"✅ Action Groups: {list(action_group_ids.keys())}")
-                print(f"✅ Session Manager updated with AgentCore configuration")
-                print("\n🚀 Your system is now using AI-orchestrated AgentCore approach!")
-                
+        # Check for existing alias or create new one
+        print("Checking for existing agent alias...")
+        alias_id = get_existing_agent_alias(bedrock_agent, agent_id, "prod")
+        
+        if not alias_id:
+            print("Creating new agent alias...")
+            alias_id = create_agent_alias(bedrock_agent, agent_id)
+            if alias_id:
+                print(f"✅ Created agent alias: {alias_id}")
             else:
-                print("Failed to update Session Manager environment")
+                print("❌ Failed to create agent alias")
+                return
         else:
-            print("Failed to create agent alias")
+            print(f"✅ Using existing alias: {alias_id}")
+        
+        # Update Session Manager with Agent details
+        print("Updating Session Manager with Bedrock Agent details...")
+        session_manager_function_name = session_manager_arn.split(':')[-1]
+        
+        if update_session_manager_environment(lambda_client, session_manager_function_name, agent_id, alias_id):
+            print("✅ Successfully updated Session Manager environment variables")
+            
+            # Grant Session Manager permissions to invoke Bedrock Agent
+            print("Granting Session Manager permissions to invoke Bedrock Agent...")
+            grant_lambda_bedrock_permissions(iam_client, lambda_client, session_manager_function_name, agent_id, alias_id)
+            
+            print("\n🎉 Phase 2 AgentCore setup complete!")
+            print(f"✅ Agent ID: {agent_id}")
+            print(f"✅ Agent Alias ID: {alias_id}")
+            print(f"✅ Action Groups: {list(action_group_ids.keys())}")
+            print(f"✅ Session Manager updated with AgentCore configuration")
+            print("\n🚀 Your system is now using AI-orchestrated AgentCore approach!")
+            
+        else:
+            print("❌ Failed to update Session Manager environment")
     else:
-        print("Failed to prepare agent")
+        print("❌ Failed to prepare agent")
 
 if __name__ == "__main__":
     main()
