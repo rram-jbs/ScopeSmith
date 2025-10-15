@@ -111,7 +111,7 @@ def create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction):
             agentName="ScopeSmithAgent",
             description="AI agent for analyzing project requirements and generating scopes of work",
             agentResourceRoleArn=agent_role_arn,  # Fixed: changed from roleArn to agentResourceRoleArn
-            foundationModel="us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Using inference profile
+            foundationModel="anthropic.claude-3-5-sonnet-20241022-v2:0",  # Fixed: removed inference profile prefix
             instruction=agent_instruction,
             idleSessionTTLInSeconds=1800  # 30 minutes
         )
@@ -334,8 +334,14 @@ def main():
         print("Failed to get Session Manager ARN")
         return
 
-    # Define agent role ARN and instruction
-    agent_role_arn = "arn:aws:iam::123456789012:role/ScopeSmithAgentRole"
+    # Get the Bedrock Agent Role ARN from CloudFormation stack
+    agent_role_arn = get_stack_output(cloudformation, 'ScopeSmithInfrastructure', 'BedrockAgentRoleArn')
+    if not agent_role_arn:
+        print("Failed to get Bedrock Agent Role ARN from CloudFormation stack")
+        return
+    
+    print(f"Using Bedrock Agent Role ARN: {agent_role_arn}")
+
     agent_instruction = """You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
     You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
     
