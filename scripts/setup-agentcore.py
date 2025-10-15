@@ -104,27 +104,18 @@ def grant_agent_lambda_permissions(lambda_client, agent_id, function_arns):
         print(f"Error granting agent Lambda permissions: {e}")
         return False
 
-def create_bedrock_agent(bedrock_agent):
+def create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction):
     """Create a Bedrock Agent for ScopeSmith"""
     try:
-        response = bedrock_agent.create_agent(
+        agent_response = bedrock_agent.create_agent(
             agentName="ScopeSmithAgent",
-            description="AI agent for proposal generation system",
-            foundationModel="anthropic.claude-3-5-sonnet-20241022-v2:0",
-            instruction="""You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
-            You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
-            
-            Your capabilities include:
-            - Analyzing client requirements and breaking them down into deliverables
-            - Calculating project costs based on standard rate sheets
-            - Retrieving appropriate document templates
-            - Generating customized PowerPoint presentations
-            - Creating detailed Statements of Work
-            
-            Always maintain a professional tone and ensure all outputs are well-structured and comprehensive.""",
-            idleSessionTTLInSeconds=3600
+            description="AI agent for analyzing project requirements and generating scopes of work",
+            roleArn=agent_role_arn,
+            foundationModel="us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Using inference profile
+            instruction=agent_instruction,
+            idleSessionTTLInSeconds=1800  # 30 minutes
         )
-        return response['agent']['agentId']
+        return agent_response['agent']['agentId']
     except ClientError as e:
         print(f"Error creating Bedrock agent: {e}")
         return None
@@ -343,9 +334,23 @@ def main():
         print("Failed to get Session Manager ARN")
         return
 
+    # Define agent role ARN and instruction
+    agent_role_arn = "arn:aws:iam::123456789012:role/ScopeSmithAgentRole"
+    agent_instruction = """You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
+    You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
+    
+    Your capabilities include:
+    - Analyzing client requirements and breaking them down into deliverables
+    - Calculating project costs based on standard rate sheets
+    - Retrieving appropriate document templates
+    - Generating customized PowerPoint presentations
+    - Creating detailed Statements of Work
+    
+    Always maintain a professional tone and ensure all outputs are well-structured and comprehensive."""
+
     # Create Bedrock Agent
     print("Creating Bedrock Agent...")
-    agent_id = create_bedrock_agent(bedrock_agent)
+    agent_id = create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction)
     if not agent_id:
         print("Failed to create Bedrock agent")
         return

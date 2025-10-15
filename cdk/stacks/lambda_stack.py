@@ -48,7 +48,9 @@ class LambdaStack(Stack):
             timeout=Duration.seconds(60),
             environment={
                 **common_environment,
-                "BEDROCK_MODEL_ID": "anthropic.claude-3-5-sonnet-20241022-v2:0"
+                "BEDROCK_MODEL_ID": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Using inference profile
+                "BEDROCK_AGENT_ID": infra_stack.bedrock_agent_id if hasattr(infra_stack, 'bedrock_agent_id') else "",
+                "BEDROCK_AGENT_ALIAS_ID": infra_stack.bedrock_agent_alias_id if hasattr(infra_stack, 'bedrock_agent_alias_id') else ""
             },
             tracing=lambda_.Tracing.ACTIVE
         )
