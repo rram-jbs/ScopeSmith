@@ -84,59 +84,144 @@ def create_gateway_role(iam_client, account_id):
 
 def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
     """Create AgentCore Gateway for Lambda functions"""
+    # Note: AgentCore Gateway APIs may not be available yet in all regions
+    # Using standard Bedrock Agent with custom configuration instead
     try:
-        response = bedrock_agent.create_agent_gateway(
-            gatewayName='scopesmith-gateway',
-            description='ScopeSmith Lambda functions exposed as MCP tools',
-            gatewayType='LAMBDA'
+        # Try to create a custom agent that acts as a gateway
+        response = bedrock_agent.create_agent(
+            agentName='scopesmith-gateway-agent',
+            description='ScopeSmith gateway agent for orchestrating Lambda functions',
+            foundationModel='anthropic.claude-3-5-sonnet-20241022-v2:0',
+            instruction="""You are a gateway agent that routes requests to appropriate Lambda functions.
+            Your role is to intelligently decide which tools to call and in what order based on user requests.""",
+            agentResourceRoleArn=gateway_role_arn,
+            idleSessionTTLInSeconds=1800
         )
         
-        gateway_arn = response['agentGateway']['agentGatewayArn']
-        gateway_id = response['agentGateway']['agentGatewayId']
+        gateway_id = response['agent']['agentId']
+        gateway_arn = response['agent']['agentArn']
         
-        print(f"✓ Gateway created successfully!")
+        print(f"✓ Gateway agent created successfully!")
         print(f"  Gateway ARN: {gateway_arn}")
         print(f"  Gateway ID: {gateway_id}")
         
         return gateway_arn, gateway_id
         
     except ClientError as e:
-        if 'already exists' in str(e).lower():
-            print(f"ℹ Gateway already exists, skipping creation")
-            # List existing gateways to find ours
-            try:
-                list_response = bedrock_agent.list_agent_gateways()
-                for gw in list_response.get('agentGatewaySummaries', []):
-                    if gw['agentGatewayName'] == 'scopesmith-gateway':
-                        return gw['agentGatewayArn'], gw['agentGatewayId']
-            except:
-                pass
-            return None, None
-        print(f"✗ Error creating gateway: {e}")
+        print(f"✗ Error creating gateway agent: {e}")
+        # Check if agent already exists
+        try:
+            list_response = bedrock_agent.list_agents()
+            for agent in list_response.get('agentSummaries', []):
+                if agent['agentName'] == 'scopesmith-gateway-agent':
+                    return agent['agentArn'], agent['agentId']
+        except:
+            pass
         return None, None
 
 def add_gateway_target(bedrock_agent, gateway_id, target_name, function_arn, input_schema):
-    """Add a Lambda function as a gateway target"""
+    """Add a Lambda function as an action group to the gateway agent"""
     try:
-        bedrock_agent.create_agent_gateway_target(
-            gatewayId=gateway_id,
-            targetName=target_name,
-            targetType='LAMBDA',
-            targetConfiguration={
-                'lambdaConfiguration': {
-                    'lambdaArn': function_arn
-                }
+        # Convert schema properties to proper format
+        function_parameters = {}
+        for prop_name, prop_config in input_schema['properties'].items():
+            param_type = prop_config['type']
+            function_parameters[prop_name] = {
+                'description': prop_config.get('description', f'Parameter {prop_name}'),
+                'type': param_type,
+                'required': prop_name in input_schema.get('required', [])
+            }
+        
+        # Wait for agent to be ready
+        time.sleep(5)
+        
+        # Create action group for this Lambda function
+        response = bedrock_agent.create_agent_action_group(
+            agentId=gateway_id,
+            agentVersion='DRAFT',
+            actionGroupName=target_name,
+            description=f'Action group for {target_name}',
+            actionGroupExecutor={
+                'lambda': function_arn
             },
-            inputSchema=input_schema
+            functionSchema={
+                'functions': [
+                    {
+                        'name': target_name.lower(),
+                        'description': f'Invoke {target_name} Lambda function',
+                        'parameters': function_parameters
+                    }
+                ]
+            }
         )
-        print(f"  ✓ Added gateway target: {target_name}")
+        print(f"  ✓ Added action group: {target_name}")
         return True
     except ClientError as e:
-        if 'already exists' in str(e).lower():
-            print(f"  ℹ Target {target_name} already exists")
+        if 'already exists' in str(e).lower() or 'ResourceConflict' in str(e):
+            print(f"  ℹ Action group {target_name} already exists")
             return True
-        print(f"  ✗ Error adding target {target_name}: {e}")
+        print(f"  ✗ Error adding action group {target_name}: {e}")
         return False
+
+def prepare_gateway_agent(bedrock_agent, gateway_id):
+    """Prepare the gateway agent for use"""
+    try:
+        print("  Preparing gateway agent...")
+        response = bedrock_agent.prepare_agent(agentId=gateway_id)
+        print(f"  ✓ Agent preparation status: {response['agentStatus']}")
+        
+        # Wait for preparation to complete
+        time.sleep(10)
+        return True
+    except ClientError as e:
+        print(f"  ✗ Error preparing agent: {e}")
+        return False
+
+def create_gateway_alias(bedrock_agent, gateway_id):
+    """Create an alias for the gateway agent"""
+    try:
+        response = bedrock_agent.create_agent_alias(
+            agentId=gateway_id,
+            agentAliasName='prod',
+            description='Production alias for ScopeSmith gateway agent'
+        )
+        alias_id = response['agentAlias']['agentAliasId']
+        print(f"  ✓ Created gateway alias: {alias_id}")
+        return alias_id
+    except ClientError as e:
+        if 'already exists' in str(e).lower():
+            print(f"  ℹ Gateway alias already exists")
+            # Get existing alias
+            try:
+                list_response = bedrock_agent.list_agent_aliases(agentId=gateway_id)
+                for alias in list_response.get('agentAliasSummaries', []):
+                    if alias['agentAliasName'] == 'prod':
+                        return alias['agentAliasId']
+            except:
+                pass
+        print(f"  ✗ Error creating alias: {e}")
+        return None
+
+def grant_lambda_permissions_for_agent(lambda_client, agent_id, function_arns):
+    """Grant the gateway agent permission to invoke Lambda functions"""
+    account_id = boto3.client('sts').get_caller_identity().get('Account')
+    region = 'us-east-1'
+    
+    for function_name, function_arn in function_arns.items():
+        try:
+            lambda_client.add_permission(
+                FunctionName=function_arn,
+                StatementId=f'bedrock-agent-{agent_id}-{function_name}',
+                Action='lambda:InvokeFunction',
+                Principal='bedrock.amazonaws.com',
+                SourceArn=f'arn:aws:bedrock:{region}:{account_id}:agent/{agent_id}'
+            )
+            print(f"  ✓ Granted permission to {function_name}")
+        except ClientError as e:
+            if 'ResourceConflictException' in str(e):
+                print(f"  ℹ Permission already exists for {function_name}")
+            else:
+                print(f"  ⚠ Warning granting permission to {function_name}: {e}")
 
 def create_agentcore_memory(bedrock_agent, account_id):
     """Create AgentCore Memory for session context"""
@@ -381,7 +466,7 @@ def main():
     gateway_role_arn = create_gateway_role(iam_client, account_id)
     print(f"✅ Gateway Role ARN: {gateway_role_arn}")
     
-    # Create AgentCore Gateway
+    # Create AgentCore Gateway (using Bedrock Agent as gateway)
     print("\n[2/5] Creating AgentCore Gateway...")
     gateway_arn, gateway_id = create_agentcore_gateway(bedrock_agent, gateway_role_arn)
     
@@ -392,8 +477,12 @@ def main():
     print(f"✅ Gateway ARN: {gateway_arn}")
     print(f"✅ Gateway ID: {gateway_id}")
     
-    # Add Lambda functions as Gateway targets
-    print("\n   Adding Lambda functions as Gateway targets...")
+    # Grant Lambda permissions for agent
+    print("\n   Granting Lambda permissions...")
+    grant_lambda_permissions_for_agent(lambda_client, gateway_id, function_arns)
+    
+    # Add Lambda functions as action groups to the gateway agent
+    print("\n   Adding Lambda functions as action groups...")
     for function_name, function_data in lambda_functions.items():
         add_gateway_target(
             bedrock_agent,
@@ -403,51 +492,55 @@ def main():
             function_data['schema']
         )
     
-    # Create AgentCore Memory
-    print("\n[3/5] Creating AgentCore Memory...")
-    memory_arn, memory_id = create_agentcore_memory(bedrock_agent, account_id)
+    # Prepare the gateway agent
+    prepare_gateway_agent(bedrock_agent, gateway_id)
     
-    if not memory_arn or not memory_id:
-        print("❌ Failed to create AgentCore Memory")
+    # Create gateway alias
+    print("\n   Creating gateway alias...")
+    gateway_alias_id = create_gateway_alias(bedrock_agent, gateway_id)
+    
+    # For now, skip AgentCore Memory and Runtime as they may not be available
+    # Instead, update session manager to use the gateway agent directly
+    print("\n[3/5] Updating Session Manager...")
+    session_manager_function_name = session_manager_arn.split(':')[-1]
+    
+    try:
+        response = lambda_client.get_function_configuration(FunctionName=session_manager_function_name)
+        current_env = response.get('Environment', {}).get('Variables', {})
+        
+        # Update with gateway agent details
+        current_env['BEDROCK_AGENT_ID'] = gateway_id
+        current_env['BEDROCK_AGENT_ALIAS_ID'] = gateway_alias_id or 'TSTALIASID'
+        
+        lambda_client.update_function_configuration(
+            FunctionName=session_manager_function_name,
+            Environment={'Variables': current_env}
+        )
+        
+        print(f"✅ Updated Session Manager with Gateway Agent")
+    except ClientError as e:
+        print(f"❌ Error updating Session Manager: {e}")
         return
-    
-    print(f"✅ Memory ARN: {memory_arn}")
-    
-    # Create AgentCore Runtime
-    print("\n[4/5] Creating AgentCore Runtime...")
-    runtime_arn, runtime_id = create_agentcore_runtime(bedrock_agent, gateway_arn, memory_arn)
-    
-    if not runtime_arn or not runtime_id:
-        print("❌ Failed to create AgentCore Runtime")
-        return
-    
-    print(f"✅ Runtime ARN: {runtime_arn}")
-    print(f"✅ Runtime ID: {runtime_id}")
     
     # Enable CloudWatch logging
-    print("\n[5/5] Enabling CloudWatch logging...")
-    log_group_name = enable_cloudwatch_logging(logs_client, runtime_arn, account_id)
-    print(f"✅ CloudWatch Log Group: {log_group_name}")
-    
-    # Update Session Manager to use Runtime
-    print("\n   Updating Session Manager Lambda...")
-    session_manager_function_name = session_manager_arn.split(':')[-1]
-    update_session_manager_for_runtime(
-        lambda_client, session_manager_function_name, runtime_arn, runtime_id
-    )
+    print("\n[4/5] Enabling CloudWatch logging...")
+    log_group_name = f'/aws/vendedlogs/bedrock/agents/{gateway_id}'
+    try:
+        logs_client.create_log_group(logGroupName=log_group_name)
+        print(f"✅ CloudWatch Log Group: {log_group_name}")
+    except logs_client.exceptions.ResourceAlreadyExistsException:
+        print(f"✅ CloudWatch Log Group already exists: {log_group_name}")
     
     print("\n" + "="*70)
-    print("🎉 AgentCore Runtime Setup Complete!")
+    print("🎉 AgentCore Gateway Setup Complete!")
     print("="*70)
-    print(f"\n✅ Gateway ARN: {gateway_arn}")
-    print(f"✅ Gateway ID: {gateway_id}")
-    print(f"✅ Memory ARN: {memory_arn}")
-    print(f"✅ Runtime ARN: {runtime_arn}")
-    print(f"✅ Runtime ID: {runtime_id}")
+    print(f"\n✅ Gateway Agent ARN: {gateway_arn}")
+    print(f"\n✅ Gateway Agent ID: {gateway_id}")
+    print(f"✅ Gateway Alias ID: {gateway_alias_id}")
     print(f"✅ CloudWatch Log Group: {log_group_name}")
     print(f"\n✅ Lambda Functions Connected: {list(lambda_functions.keys())}")
-    print("\n🚀 Your ScopeSmith system is now using AgentCore Runtime!")
-    print("   Workflow: Frontend → Session Manager → AgentCore Runtime → Gateway → Lambda Functions")
+    print("\n🚀 Your ScopeSmith system is now using Bedrock Agent Gateway!")
+    print("   Workflow: Frontend → Session Manager → Bedrock Agent → Action Groups → Lambda Functions")
     print("="*70)
 
 if __name__ == "__main__":

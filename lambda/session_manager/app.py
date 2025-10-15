@@ -56,24 +56,23 @@ def get_session_status(session_id):
         'updated_at': item['updated_at']['S']
     }
 
-def invoke_agentcore_runtime(session_id, client_name, project_name, industry, requirements, duration, team_size):
-    """Invoke AgentCore Runtime for autonomous proposal generation"""
-    print(f"[AGENTCORE RUNTIME] Starting invocation for session: {session_id}")
+def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
+    """Invoke Bedrock Agent for autonomous proposal generation"""
+    print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
     
-    runtime_arn = os.environ.get('AGENTCORE_RUNTIME_ARN')
-    runtime_id = os.environ.get('AGENTCORE_RUNTIME_ID')
+    agent_id = os.environ.get('BEDROCK_AGENT_ID')
+    agent_alias_id = os.environ.get('BEDROCK_AGENT_ALIAS_ID')
     
-    if not runtime_arn or not runtime_id:
-        raise ValueError("AgentCore Runtime not configured. Please run setup-agentcore.py script.")
+    if not agent_id or not agent_alias_id:
+        raise ValueError("Bedrock Agent not configured. Please run setup-agentcore.py script.")
     
-    print(f"[AGENTCORE RUNTIME] Runtime ARN: {runtime_arn}")
-    print(f"[AGENTCORE RUNTIME] Runtime ID: {runtime_id}")
+    print(f"[BEDROCK AGENT] Agent ID: {agent_id}")
+    print(f"[BEDROCK AGENT] Agent Alias ID: {agent_alias_id}")
     
-    bedrock_agentcore_runtime = boto3.client('bedrock-agentcore-runtime')
+    bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
     
-    # Create input payload for runtime
-    input_payload = {
-        'prompt': f"""Convert the following client meeting notes into a complete project proposal:
+    # Create input text for agent
+    input_text = f"""Convert the following client meeting notes into a complete project proposal:
 
 Client Information:
 - Client Name: {client_name}
@@ -88,34 +87,64 @@ Meeting Notes:
 Session ID: {session_id}
 
 Please work autonomously to complete the full proposal workflow."""
-    }
+
+    print(f"[BEDROCK AGENT] Sending input to agent")
     
-    print(f"[AGENTCORE RUNTIME] Sending payload to runtime")
-    
-    response = bedrock_agentcore_runtime.invoke_agent_runtime(
-        agentRuntimeArn=runtime_arn,
-        runtimeSessionId=session_id,
-        payload=json.dumps(input_payload).encode()
+    response = bedrock_agent_runtime.invoke_agent(
+        agentId=agent_id,
+        agentAliasId=agent_alias_id,
+        sessionId=session_id,
+        inputText=input_text
     )
     
-    print(f"[AGENTCORE RUNTIME] Runtime invocation successful")
+    print(f"[BEDROCK AGENT] Agent invocation successful")
     
-    # Process streaming response
-    content = []
-    if "text/event-stream" in response.get("contentType", ""):
-        for line in response["response"].iter_lines(chunk_size=10):
-            if line:
-                line = line.decode("utf-8")
-                if line.startswith("data: "):
-                    line = line[6:]
-                    print(f"[RUNTIME STREAM] {line}")
-                    content.append(line)
+    # Process the EventStream
+    event_stream = response['completion']
+    full_response = ""
+    tool_calls = []
     
-    full_response = "\n".join(content)
+    print(f"[BEDROCK AGENT] Processing EventStream...")
+    
+    for event in event_stream:
+        if 'chunk' in event:
+            chunk = event['chunk']
+            if 'bytes' in chunk:
+                chunk_text = chunk['bytes'].decode('utf-8')
+                print(f"[CHUNK] {chunk_text}")
+                full_response += chunk_text
+        
+        elif 'trace' in event:
+            trace = event['trace']
+            print(f"[TRACE] {json.dumps(trace, default=str, indent=2)}")
+            
+            # Track tool invocations
+            if 'trace' in trace:
+                trace_data = trace['trace']
+                if 'orchestrationTrace' in trace_data:
+                    orch = trace_data['orchestrationTrace']
+                    if 'invocationInput' in orch:
+                        tool_calls.append(orch['invocationInput'])
+                        print(f"[TOOL CALL] {json.dumps(orch['invocationInput'], default=str, indent=2)}")
+                    if 'observation' in orch:
+                        print(f"[TOOL RESPONSE] {json.dumps(orch['observation'], default=str, indent=2)}")
+        
+        elif 'returnControl' in event:
+            print(f"[RETURN_CONTROL] Agent requires user input")
+            return {
+                'status': 'awaiting_input',
+                'event': event['returnControl'],
+                'session_id': session_id
+            }
+    
+    print(f"[BEDROCK AGENT] EventStream processing complete")
+    print(f"[BEDROCK AGENT] Full response length: {len(full_response)} chars")
+    print(f"[BEDROCK AGENT] Total tool calls: {len(tool_calls)}")
     
     return {
         'status': 'completed',
         'response': full_response,
+        'tool_calls': tool_calls,
         'session_id': session_id
     }
 
@@ -153,8 +182,8 @@ def handler(event, context):
             )
             
             try:
-                print(f"[SESSION] Invoking AgentCore Runtime for session: {session_id}")
-                agent_response = invoke_agentcore_runtime(
+                print(f"[SESSION] Invoking Bedrock Agent for session: {session_id}")
+                agent_response = invoke_bedrock_agent(
                     session_id, 
                     body['client_name'], 
                     body.get('project_name', ''), 
@@ -164,7 +193,7 @@ def handler(event, context):
                     body.get('team_size', 1)
                 )
                 
-                print(f"[SESSION] ✓ AgentCore Runtime invocation completed")
+                print(f"[SESSION] ✓ Bedrock Agent invocation completed")
                 
                 # Update status
                 dynamodb = boto3.client('dynamodb')
@@ -174,18 +203,18 @@ def handler(event, context):
                     UpdateExpression='SET #status = :status, updated_at = :ua',
                     ExpressionAttributeNames={'#status': 'status'},
                     ExpressionAttributeValues={
-                        ':status': {'S': 'AGENTCORE_PROCESSING'},
+                        ':status': {'S': 'AGENT_PROCESSING'},
                         ':ua': {'S': datetime.utcnow().isoformat()}
                     }
                 )
                 
                 return create_cors_response(200, {
                     'session_id': session_id,
-                    'message': 'Assessment started with AgentCore Runtime'
+                    'message': 'Assessment started with Bedrock Agent'
                 })
                 
             except Exception as e:
-                print(f"[SESSION] ✗ AgentCore Runtime invocation failed: {str(e)}")
+                print(f"[SESSION] ✗ Bedrock Agent invocation failed: {str(e)}")
                 
                 # Update session with error
                 dynamodb = boto3.client('dynamodb')
@@ -196,7 +225,7 @@ def handler(event, context):
                     ExpressionAttributeNames={'#status': 'status'},
                     ExpressionAttributeValues={
                         ':status': {'S': 'ERROR'},
-                        ':error': {'S': f'AgentCore Runtime invocation failed: {str(e)}'},
+                        ':error': {'S': f'Bedrock Agent invocation failed: {str(e)}'},
                         ':ua': {'S': datetime.utcnow().isoformat()}
                     }
                 )
