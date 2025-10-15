@@ -138,7 +138,7 @@ const submitAssessment = async () => {
   submitError.value = null
 
   try {
-    const response = await post('/api/assessments', {
+    const response = await post('/api/submit-assessment', {
       requirements: formData.value.requirements,
       client_name: formData.value.clientName,
       project_type: formData.value.projectType
