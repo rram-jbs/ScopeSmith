@@ -1,84 +1,110 @@
 <template>
   <div class="assessment-view">
-    <div class="container">
-      <header class="header">
-        <h1>ScopeSmith</h1>
-        <p class="subtitle">AI-Powered Proposal Generator</p>
-      </header>
+    <!-- Header -->
+    <div class="header">
+      <h1>🚀 ScopeSmith Proposal Generator</h1>
+      <p class="subtitle">Powered by Amazon Nova Pro AI</p>
+    </div>
 
-      <!-- Step 1: Form -->
-      <div v-if="currentStep === 'form'" class="form-section">
-        <div class="card">
-          <h2>Project Information</h2>
-          <form @submit.prevent="submitAssessment">
-            <div class="form-group">
-              <label>Client Name *</label>
-              <input v-model="formData.client_name" type="text" required placeholder="Enter client name" />
-            </div>
+    <!-- Form View -->
+    <div v-if="currentView === 'form'" class="form-container">
+      <div class="form-card">
+        <h2>📝 Project Assessment</h2>
+        <p class="form-description">
+          Paste your client meeting notes below. Our AI will analyze requirements, 
+          calculate costs, and generate a complete proposal with PowerPoint and SOW documents.
+        </p>
 
-            <div class="form-group">
-              <label>Project Name</label>
-              <input v-model="formData.project_name" type="text" placeholder="Enter project name" />
-            </div>
+        <form @submit.prevent="submitAssessment">
+          <div class="form-group">
+            <label for="requirements">Client Meeting Notes</label>
+            <textarea
+              id="requirements"
+              v-model="formData.requirements"
+              placeholder="Example:&#10;&#10;Client: TechCorp Inc&#10;Project: Modernize inventory system&#10;&#10;Requirements:&#10;- Migrate to microservices architecture&#10;- Real-time inventory tracking&#10;- Mobile app for warehouse staff&#10;- Integration with existing ERP&#10;- Support 10,000+ concurrent users&#10;&#10;Timeline: 9-12 months&#10;Budget: Flexible"
+              rows="15"
+              required
+            ></textarea>
+          </div>
 
-            <div class="form-group">
-              <label>Industry</label>
-              <input v-model="formData.industry" type="text" placeholder="e.g., Retail, Healthcare, Finance" />
-            </div>
+          <div class="form-group">
+            <label for="clientName">Client Name (Optional)</label>
+            <input
+              type="text"
+              id="clientName"
+              v-model="formData.clientName"
+              placeholder="e.g., TechCorp Inc"
+            />
+          </div>
 
-            <div class="form-group">
-              <label>Project Duration</label>
-              <input v-model="formData.duration" type="text" placeholder="e.g., 6 months, 12+ months" />
-            </div>
+          <div class="form-group">
+            <label for="projectType">Project Type (Optional)</label>
+            <select id="projectType" v-model="formData.projectType">
+              <option value="">Auto-detect</option>
+              <option value="web-application">Web Application</option>
+              <option value="mobile-app">Mobile App</option>
+              <option value="enterprise-software">Enterprise Software</option>
+              <option value="cloud-migration">Cloud Migration</option>
+              <option value="data-analytics">Data Analytics</option>
+            </select>
+          </div>
 
-            <div class="form-group">
-              <label>Team Size</label>
-              <input v-model="formData.team_size" type="number" min="1" placeholder="Number of team members" />
-            </div>
+          <button 
+            type="submit" 
+            class="submit-button"
+            :disabled="isSubmitting"
+          >
+            <span v-if="!isSubmitting">Generate Proposal 🎯</span>
+            <span v-else>Creating Session...</span>
+          </button>
+        </form>
 
-            <div class="form-group">
-              <label>Requirements / Meeting Notes *</label>
-              <textarea 
-                v-model="formData.requirements" 
-                rows="10" 
-                required 
-                placeholder="Paste your client meeting notes or project requirements here..."
-              ></textarea>
-            </div>
-
-            <button type="submit" class="btn-primary" :disabled="isSubmitting">
-              {{ isSubmitting ? 'Processing...' : 'Generate Proposal' }}
-            </button>
-          </form>
+        <div v-if="submitError" class="error-message">
+          {{ submitError }}
         </div>
       </div>
+    </div>
 
-      <!-- Step 2: Processing with Agent Stream -->
-      <div v-if="currentStep === 'processing'" class="processing-section">
-        <AgentStreamViewer 
-          :session-id="sessionId" 
-          @complete="handleAgentComplete"
-          @error="handleAgentError"
-        />
-      </div>
+    <!-- Processing View with Agent Stream -->
+    <div v-if="currentView === 'processing'" class="processing-container">
+      <AgentStreamViewer 
+        :sessionId="sessionId"
+        @complete="handleAgentComplete"
+        @error="handleAgentError"
+      />
+    </div>
 
-      <!-- Step 3: Results -->
-      <div v-if="currentStep === 'results'" class="results-section">
-        <div class="results-card">
-          <h2>✅ Proposal Generated Successfully!</h2>
-          <p>Your project proposal documents are ready for download.</p>
-          
-          <div class="download-buttons">
-            <a v-if="powerpointUrl" :href="powerpointUrl" class="download-btn" download>
-              📊 Download PowerPoint Presentation
-            </a>
-            <a v-if="sowUrl" :href="sowUrl" class="download-btn" download>
-              📄 Download Statement of Work
+    <!-- Results View -->
+    <div v-if="currentView === 'results'" class="results-container">
+      <div class="results-card">
+        <div class="results-header">
+          <h2>✅ Proposal Ready!</h2>
+          <p>Your proposal documents have been generated successfully.</p>
+        </div>
+
+        <div class="documents-grid">
+          <div v-if="documents.powerpoint" class="document-card">
+            <div class="document-icon">📊</div>
+            <h3>PowerPoint Presentation</h3>
+            <p>Professional presentation with project overview, costs, and timeline</p>
+            <a :href="documents.powerpoint" class="download-button" download>
+              Download Presentation
             </a>
           </div>
 
-          <button @click="startNew" class="btn-secondary">Create Another Proposal</button>
+          <div v-if="documents.sow" class="document-card">
+            <div class="document-icon">📄</div>
+            <h3>Statement of Work</h3>
+            <p>Detailed SOW document with deliverables, milestones, and terms</p>
+            <a :href="documents.sow" class="download-button" download>
+              Download SOW
+            </a>
+          </div>
         </div>
+
+        <button @click="startNew" class="new-assessment-button">
+          Create New Proposal
+        </button>
       </div>
     </div>
   </div>
@@ -88,41 +114,59 @@
 import { ref } from 'vue'
 import AgentStreamViewer from '../components/AgentStreamViewer.vue'
 
-const currentStep = ref('form') // 'form', 'processing', 'results'
+const currentView = ref('form') // 'form', 'processing', 'results'
 const sessionId = ref(null)
-const powerpointUrl = ref(null)
-const sowUrl = ref(null)
 const isSubmitting = ref(false)
+const submitError = ref(null)
 
 const formData = ref({
-  client_name: '',
-  project_name: '',
-  industry: '',
-  duration: '',
-  team_size: 1,
-  requirements: ''
+  requirements: '',
+  clientName: '',
+  projectType: ''
+})
+
+const documents = ref({
+  powerpoint: null,
+  sow: null
 })
 
 const submitAssessment = async () => {
   isSubmitting.value = true
-  
+  submitError.value = null
+
   try {
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/submit-assessment`, {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    
+    console.log('Submitting to:', `${apiUrl}/api/assessments`)
+    
+    const response = await fetch(`${apiUrl}/api/assessments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(formData.value)
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requirements: formData.value.requirements,
+        client_name: formData.value.clientName,
+        project_type: formData.value.projectType
+      })
     })
-    
+
     if (!response.ok) {
-      throw new Error('Failed to submit assessment')
+      const errorData = await response.json().catch(() => ({}))
+      throw new Error(errorData.error || `HTTP ${response.status}`)
     }
-    
+
     const data = await response.json()
+    console.log('Assessment created:', data)
+
     sessionId.value = data.session_id
-    currentStep.value = 'processing' // Switch to processing view
+
+    // Switch to processing view
+    currentView.value = 'processing'
+
   } catch (error) {
-    console.error('Error submitting assessment:', error)
-    alert('Failed to submit assessment. Please try again.')
+    console.error('Submission error:', error)
+    submitError.value = `Failed to submit: ${error.message}`
   } finally {
     isSubmitting.value = false
   }
@@ -131,42 +175,43 @@ const submitAssessment = async () => {
 const handleAgentComplete = async (data) => {
   console.log('Agent completed:', data)
   
-  // Fetch final results
+  // Fetch document URLs
   try {
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/results/${sessionId.value}`)
-    const results = await response.json()
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const response = await fetch(`${apiUrl}/api/results/${sessionId.value}`)
     
-    powerpointUrl.value = results.powerpoint_url
-    sowUrl.value = results.sow_url
-    currentStep.value = 'results'
+    if (response.ok) {
+      const results = await response.json()
+      documents.value = {
+        powerpoint: results.powerpoint_url,
+        sow: results.sow_url
+      }
+    }
   } catch (error) {
-    console.error('Error fetching results:', error)
-    alert('Failed to fetch results. Please check the logs.')
+    console.error('Error fetching documents:', error)
   }
+  
+  // Switch to results view
+  currentView.value = 'results'
 }
 
-const handleAgentError = (errorMessage) => {
-  console.error('Agent error:', errorMessage)
-  alert(`Error: ${errorMessage}`)
-  currentStep.value = 'form'
-  isSubmitting.value = false
+const handleAgentError = (error) => {
+  console.error('Agent error:', error)
+  submitError.value = error
+  currentView.value = 'form'
 }
 
 const startNew = () => {
+  currentView.value = 'form'
   sessionId.value = null
-  powerpointUrl.value = null
-  sowUrl.value = null
-  currentStep.value = 'form'
-  isSubmitting.value = false
-  
-  // Reset form
   formData.value = {
-    client_name: '',
-    project_name: '',
-    industry: '',
-    duration: '',
-    team_size: 1,
-    requirements: ''
+    requirements: '',
+    clientName: '',
+    projectType: ''
+  }
+  documents.value = {
+    powerpoint: null,
+    sow: null
   }
 }
 </script>
@@ -175,18 +220,13 @@ const startNew = () => {
 .assessment-view {
   min-height: 100vh;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  padding: 2rem 1rem;
-}
-
-.container {
-  max-width: 1000px;
-  margin: 0 auto;
+  padding: 2rem;
 }
 
 .header {
   text-align: center;
   color: white;
-  margin-bottom: 2rem;
+  margin-bottom: 3rem;
 }
 
 .header h1 {
@@ -196,20 +236,31 @@ const startNew = () => {
 }
 
 .subtitle {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
   opacity: 0.9;
 }
 
-.card {
-  background: white;
-  border-radius: 12px;
-  padding: 2rem;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+.form-container, .processing-container, .results-container {
+  max-width: 800px;
+  margin: 0 auto;
 }
 
-.card h2 {
-  margin-bottom: 1.5rem;
-  color: #333;
+.form-card, .results-card {
+  background: white;
+  border-radius: 12px;
+  padding: 2.5rem;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+}
+
+.form-card h2 {
+  color: #1f2937;
+  margin-bottom: 0.5rem;
+}
+
+.form-description {
+  color: #6b7280;
+  margin-bottom: 2rem;
+  line-height: 1.6;
 }
 
 .form-group {
@@ -219,32 +270,35 @@ const startNew = () => {
 .form-group label {
   display: block;
   margin-bottom: 0.5rem;
+  color: #374151;
   font-weight: 600;
-  color: #555;
 }
 
 .form-group input,
+.form-group select,
 .form-group textarea {
   width: 100%;
   padding: 0.75rem;
   border: 2px solid #e5e7eb;
   border-radius: 8px;
   font-size: 1rem;
-  transition: border-color 0.3s;
+  font-family: inherit;
+  transition: border-color 0.2s;
+}
+
+.form-group textarea {
+  resize: vertical;
+  font-family: 'Courier New', monospace;
 }
 
 .form-group input:focus,
+.form-group select:focus,
 .form-group textarea:focus {
   outline: none;
   border-color: #667eea;
 }
 
-.form-group textarea {
-  resize: vertical;
-  font-family: inherit;
-}
-
-.btn-primary {
+.submit-button {
   width: 100%;
   padding: 1rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -254,82 +308,110 @@ const startNew = () => {
   font-size: 1.1rem;
   font-weight: 600;
   cursor: pointer;
-  transition: transform 0.2s;
+  transition: transform 0.2s, box-shadow 0.2s;
 }
 
-.btn-primary:hover:not(:disabled) {
+.submit-button:hover:not(:disabled) {
   transform: translateY(-2px);
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
 }
 
-.btn-primary:disabled {
+.submit-button:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.processing-section {
-  margin-top: 2rem;
+.error-message {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: #fee2e2;
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  color: #991b1b;
 }
 
-.results-section {
-  margin-top: 2rem;
-}
-
-.results-card {
-  background: white;
-  padding: 3rem;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+.results-header {
   text-align: center;
-}
-
-.results-card h2 {
-  color: #10b981;
-  margin-bottom: 1rem;
-  font-size: 2rem;
-}
-
-.results-card p {
-  color: #6b7280;
   margin-bottom: 2rem;
-  font-size: 1.1rem;
 }
 
-.download-buttons {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin: 2rem 0;
+.results-header h2 {
+  color: #059669;
+  margin-bottom: 0.5rem;
 }
 
-.download-btn {
+.results-header p {
+  color: #6b7280;
+}
+
+.documents-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.document-card {
+  padding: 2rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  text-align: center;
+  transition: all 0.3s;
+}
+
+.document-card:hover {
+  border-color: #667eea;
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.2);
+  transform: translateY(-5px);
+}
+
+.document-icon {
+  font-size: 3rem;
+  margin-bottom: 1rem;
+}
+
+.document-card h3 {
+  color: #1f2937;
+  margin-bottom: 0.5rem;
+}
+
+.document-card p {
+  color: #6b7280;
+  font-size: 0.9rem;
+  margin-bottom: 1.5rem;
+}
+
+.download-button {
   display: inline-block;
-  padding: 1rem 2rem;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  padding: 0.75rem 1.5rem;
+  background: #667eea;
   color: white;
   text-decoration: none;
   border-radius: 8px;
   font-weight: 600;
-  transition: transform 0.2s;
-  font-size: 1.1rem;
+  transition: all 0.2s;
 }
 
-.download-btn:hover {
-  transform: translateY(-2px);
+.download-button:hover {
+  background: #5a67d8;
+  transform: scale(1.05);
 }
 
-.btn-secondary {
-  margin-top: 1rem;
-  padding: 0.75rem 1.5rem;
-  background: #6b7280;
-  color: white;
-  border: none;
+.new-assessment-button {
+  width: 100%;
+  padding: 1rem;
+  background: #f3f4f6;
+  color: #374151;
+  border: 2px solid #e5e7eb;
   border-radius: 8px;
-  cursor: pointer;
   font-size: 1rem;
-  transition: background 0.3s;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
 }
 
-.btn-secondary:hover {
-  background: #4b5563;
+.new-assessment-button:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
 }
 </style>

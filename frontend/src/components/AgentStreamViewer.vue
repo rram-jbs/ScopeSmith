@@ -1,60 +1,47 @@
 <template>
   <div class="agent-stream-viewer">
-    <div class="stream-header">
-      <h3>AI Agent Activity</h3>
-      <span class="status-badge" :class="statusClass">{{ statusText }}</span>
-    </div>
-    
-    <div class="stream-content" ref="streamContent">
-      <div v-for="(event, index) in events" :key="index" class="event-item" :class="`event-${event.type}`">
-        <div class="event-header">
-          <span class="event-icon">{{ getEventIcon(event.type) }}</span>
-          <span class="event-type">{{ formatEventType(event.type) }}</span>
-          <span class="event-time">{{ formatTime(event.timestamp) }}</span>
-        </div>
-        
-        <div class="event-content">
-          <div v-if="event.type === 'reasoning'" class="reasoning-content">
-            <p>{{ event.content }}</p>
-          </div>
-          
-          <div v-else-if="event.type === 'tool_call'" class="tool-call-content">
-            <div class="tool-name">
-              <strong>{{ event.action_group }}</strong>
-            </div>
-            <div v-if="event.parameters && event.parameters.length > 0" class="tool-params">
-              <div v-for="param in event.parameters" :key="param.name" class="param">
-                <span class="param-name">{{ param.name }}:</span>
-                <span class="param-value">{{ truncate(param.value, 100) }}</span>
-              </div>
-            </div>
-          </div>
-          
-          <div v-else-if="event.type === 'tool_response'" class="tool-response-content">
-            <pre>{{ formatResponse(event.content) }}</pre>
-          </div>
-          
-          <div v-else-if="event.type === 'chunk'" class="chunk-content">
-            <p>{{ event.content }}</p>
-          </div>
-          
-          <div v-else-if="event.type === 'final_response'" class="final-response-content">
-            <div class="final-badge">✓ Complete</div>
-            <p>{{ event.content }}</p>
-          </div>
-        </div>
+    <div class="stream-container">
+      <div class="stream-header">
+        <h2>🤖 AI Agent Progress</h2>
+        <span class="status-badge" :class="statusClass">{{ status }}</span>
       </div>
-      
-      <div v-if="isProcessing" class="loading-indicator">
-        <div class="spinner"></div>
-        <span>Agent is processing...</span>
+
+      <div class="events-container" ref="eventsContainer">
+        <div v-if="events.length === 0" class="loading">
+          <div class="spinner"></div>
+          <p>Starting agent...</p>
+        </div>
+
+        <div v-for="(event, index) in events" :key="index" class="event-card" :class="`event-${event.type}`">
+          <div class="event-header">
+            <span class="event-icon">{{ getEventIcon(event.type) }}</span>
+            <span class="event-type">{{ formatEventType(event.type) }}</span>
+            <span class="event-time">{{ formatTime(event.timestamp) }}</span>
+          </div>
+          <div class="event-content">
+            <pre v-if="event.type === 'tool_call'">{{ formatToolCall(event) }}</pre>
+            <pre v-else-if="event.type === 'tool_response'">{{ formatToolResponse(event.content) }}</pre>
+            <div v-else-if="event.type === 'reasoning'" class="reasoning-text">{{ event.content }}</div>
+            <div v-else class="event-text">{{ event.content }}</div>
+          </div>
+        </div>
+
+        <div v-if="status === 'COMPLETED'" class="completion-card">
+          <h3>✅ Proposal Generation Complete!</h3>
+          <p>Your documents are ready for download.</p>
+        </div>
+
+        <div v-if="error" class="error-card">
+          <h3>❌ Error</h3>
+          <p>{{ error }}</p>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 
 const props = defineProps({
   sessionId: {
@@ -66,26 +53,12 @@ const props = defineProps({
 const emit = defineEmits(['complete', 'error'])
 
 const events = ref([])
-const isProcessing = ref(true)
-const currentStatus = ref('INITIATED')
-const streamContent = ref(null)
+const status = ref('STARTING')
+const error = ref(null)
+const eventsContainer = ref(null)
 let pollInterval = null
 
-const statusClass = computed(() => {
-  if (currentStatus.value === 'ERROR') return 'status-error'
-  if (currentStatus.value === 'COMPLETED') return 'status-success'
-  return 'status-processing'
-})
-
-const statusText = computed(() => {
-  const statusMap = {
-    'INITIATED': 'Starting',
-    'AGENT_PROCESSING': 'Processing',
-    'COMPLETED': 'Completed',
-    'ERROR': 'Error'
-  }
-  return statusMap[currentStatus.value] || 'Processing'
-})
+const statusClass = ref('status-processing')
 
 const getEventIcon = (type) => {
   const icons = {
@@ -93,7 +66,9 @@ const getEventIcon = (type) => {
     'tool_call': '🔧',
     'tool_response': '✅',
     'chunk': '💬',
-    'final_response': '🎉'
+    'final_response': '🎉',
+    'warning': '⚠️',
+    'error': '❌'
   }
   return icons[type] || '📝'
 }
@@ -101,10 +76,12 @@ const getEventIcon = (type) => {
 const formatEventType = (type) => {
   const labels = {
     'reasoning': 'Agent Thinking',
-    'tool_call': 'Calling Tool',
-    'tool_response': 'Tool Response',
+    'tool_call': 'Calling Function',
+    'tool_response': 'Function Response',
     'chunk': 'Agent Response',
-    'final_response': 'Final Result'
+    'final_response': 'Final Response',
+    'warning': 'Warning',
+    'error': 'Error'
   }
   return labels[type] || type
 }
@@ -112,16 +89,15 @@ const formatEventType = (type) => {
 const formatTime = (timestamp) => {
   if (!timestamp) return ''
   const date = new Date(timestamp)
-  return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return date.toLocaleTimeString()
 }
 
-const truncate = (str, length) => {
-  if (!str) return ''
-  return str.length > length ? str.substring(0, length) + '...' : str
+const formatToolCall = (event) => {
+  const params = event.parameters?.map(p => `  ${p.name}: ${p.value}`).join('\n') || ''
+  return `Function: ${event.function}\nAction Group: ${event.action_group}\nParameters:\n${params}`
 }
 
-const formatResponse = (content) => {
-  if (!content) return ''
+const formatToolResponse = (content) => {
   try {
     const parsed = JSON.parse(content)
     return JSON.stringify(parsed, null, 2)
@@ -130,75 +106,94 @@ const formatResponse = (content) => {
   }
 }
 
-const scrollToBottom = () => {
-  if (streamContent.value) {
-    streamContent.value.scrollTop = streamContent.value.scrollHeight
+const scrollToBottom = async () => {
+  await nextTick()
+  if (eventsContainer.value) {
+    eventsContainer.value.scrollTop = eventsContainer.value.scrollHeight
   }
 }
 
-const fetchAgentEvents = async () => {
+const fetchAgentStatus = async () => {
   try {
-    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/agent-status/${props.sessionId}`)
-    const data = await response.json()
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000'
+    const response = await fetch(`${apiUrl}/api/agent-status/${props.sessionId}`)
     
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+    
+    const data = await response.json()
+    console.log('Agent status:', data)
+    
+    status.value = data.status || 'PROCESSING'
+    
+    // Update status class
+    if (status.value === 'COMPLETED') {
+      statusClass.value = 'status-completed'
+    } else if (status.value === 'ERROR') {
+      statusClass.value = 'status-error'
+    } else {
+      statusClass.value = 'status-processing'
+    }
+    
+    // Parse agent events
     if (data.agent_events) {
-      const parsedEvents = typeof data.agent_events === 'string' 
-        ? JSON.parse(data.agent_events) 
-        : data.agent_events
-      
-      events.value = parsedEvents
-      currentStatus.value = data.status
-      
-      // Auto-scroll to bottom when new events arrive
-      setTimeout(scrollToBottom, 100)
-      
-      // Check if completed
-      if (data.status === 'COMPLETED' || data.status === 'ERROR') {
-        isProcessing.value = false
-        stopPolling()
+      try {
+        const parsedEvents = typeof data.agent_events === 'string' 
+          ? JSON.parse(data.agent_events) 
+          : data.agent_events
         
-        if (data.status === 'COMPLETED') {
-          emit('complete', data)
-        } else {
-          emit('error', data.error_message)
+        if (parsedEvents.length > events.value.length) {
+          events.value = parsedEvents
+          scrollToBottom()
         }
+      } catch (e) {
+        console.error('Error parsing agent events:', e)
       }
     }
-  } catch (error) {
-    console.error('Error fetching agent events:', error)
-  }
-}
-
-const startPolling = () => {
-  fetchAgentEvents() // Initial fetch
-  pollInterval = setInterval(fetchAgentEvents, 2000) // Poll every 2 seconds
-}
-
-const stopPolling = () => {
-  if (pollInterval) {
-    clearInterval(pollInterval)
-    pollInterval = null
+    
+    // Check for completion or error
+    if (status.value === 'COMPLETED') {
+      clearInterval(pollInterval)
+      emit('complete', data)
+    } else if (status.value === 'ERROR') {
+      clearInterval(pollInterval)
+      error.value = data.error_message || 'An error occurred'
+      emit('error', error.value)
+    }
+    
+  } catch (err) {
+    console.error('Error fetching agent status:', err)
+    error.value = `Failed to fetch status: ${err.message}`
   }
 }
 
 onMounted(() => {
-  startPolling()
+  console.log('AgentStreamViewer mounted for session:', props.sessionId)
+  
+  // Start polling every 2 seconds
+  fetchAgentStatus()
+  pollInterval = setInterval(fetchAgentStatus, 2000)
 })
 
 onUnmounted(() => {
-  stopPolling()
-})
-
-watch(() => events.value.length, () => {
-  scrollToBottom()
+  if (pollInterval) {
+    clearInterval(pollInterval)
+  }
 })
 </script>
 
 <style scoped>
 .agent-stream-viewer {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.stream-container {
   background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   overflow: hidden;
 }
 
@@ -206,44 +201,70 @@ watch(() => events.value.length, () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.5rem;
+  padding: 1.5rem 2rem;
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
 }
 
-.stream-header h3 {
+.stream-header h2 {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: 1.5rem;
 }
 
 .status-badge {
   padding: 0.5rem 1rem;
   border-radius: 20px;
-  font-size: 0.875rem;
+  font-size: 0.9rem;
   font-weight: 600;
+  text-transform: uppercase;
 }
 
 .status-processing {
-  background: rgba(255, 255, 255, 0.2);
+  background: #fbbf24;
+  color: #78350f;
 }
 
-.status-success {
+.status-completed {
   background: #10b981;
+  color: white;
 }
 
 .status-error {
   background: #ef4444;
+  color: white;
 }
 
-.stream-content {
+.events-container {
   max-height: 600px;
   overflow-y: auto;
   padding: 1.5rem;
 }
 
-.event-item {
-  margin-bottom: 1.5rem;
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  color: #6b7280;
+}
+
+.spinner {
+  width: 50px;
+  height: 50px;
+  border: 4px solid #e5e7eb;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.event-card {
+  margin-bottom: 1rem;
   padding: 1rem;
   border-radius: 8px;
   border-left: 4px solid;
@@ -263,137 +284,114 @@ watch(() => events.value.length, () => {
 
 .event-reasoning {
   background: #eff6ff;
-  border-left-color: #3b82f6;
+  border-color: #3b82f6;
 }
 
 .event-tool_call {
   background: #f0fdf4;
-  border-left-color: #10b981;
+  border-color: #10b981;
 }
 
 .event-tool_response {
-  background: #fef3c7;
-  border-left-color: #f59e0b;
+  background: #fefce8;
+  border-color: #eab308;
 }
 
 .event-chunk {
-  background: #f3e8ff;
-  border-left-color: #a855f7;
+  background: #f5f3ff;
+  border-color: #8b5cf6;
 }
 
-.event-final_response {
-  background: #d1fae5;
-  border-left-color: #059669;
+.event-warning {
+  background: #fef3c7;
+  border-color: #f59e0b;
+}
+
+.event-error {
+  background: #fee2e2;
+  border-color: #ef4444;
 }
 
 .event-header {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  gap: 0.5rem;
   margin-bottom: 0.5rem;
+  font-weight: 600;
+  font-size: 0.9rem;
 }
 
 .event-icon {
-  font-size: 1.25rem;
+  font-size: 1.2rem;
 }
 
 .event-type {
-  font-weight: 600;
+  flex: 1;
   color: #374151;
 }
 
 .event-time {
-  margin-left: auto;
-  font-size: 0.75rem;
   color: #6b7280;
+  font-size: 0.8rem;
+  font-weight: normal;
 }
 
 .event-content {
-  color: #4b5563;
+  color: #1f2937;
+}
+
+.event-content pre {
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.75rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.reasoning-text {
+  font-style: italic;
+  color: #1e40af;
   line-height: 1.6;
 }
 
-.reasoning-content p {
-  margin: 0;
-  font-style: italic;
+.event-text {
+  line-height: 1.6;
 }
 
-.tool-call-content {
-  font-family: 'Monaco', 'Courier New', monospace;
+.completion-card, .error-card {
+  margin-top: 2rem;
+  padding: 2rem;
+  border-radius: 8px;
+  text-align: center;
+  animation: slideIn 0.3s ease-out;
 }
 
-.tool-name {
-  margin-bottom: 0.5rem;
-  color: #059669;
+.completion-card {
+  background: #d1fae5;
+  border: 2px solid #10b981;
 }
 
-.tool-params {
-  background: rgba(0, 0, 0, 0.05);
-  padding: 0.75rem;
-  border-radius: 4px;
-}
-
-.param {
-  margin-bottom: 0.25rem;
-}
-
-.param-name {
-  font-weight: 600;
-  color: #6b7280;
-}
-
-.param-value {
-  margin-left: 0.5rem;
-  color: #374151;
-}
-
-.tool-response-content pre {
-  margin: 0;
-  padding: 0.75rem;
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 4px;
-  overflow-x: auto;
-  font-size: 0.875rem;
-}
-
-.chunk-content p {
-  margin: 0;
-  white-space: pre-wrap;
-}
-
-.final-response-content {
-  position: relative;
-}
-
-.final-badge {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  background: #059669;
-  color: white;
-  border-radius: 12px;
-  font-size: 0.75rem;
-  font-weight: 600;
+.completion-card h3 {
+  color: #065f46;
   margin-bottom: 0.5rem;
 }
 
-.loading-indicator {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  padding: 1rem;
-  color: #6b7280;
+.completion-card p {
+  color: #047857;
 }
 
-.spinner {
-  width: 20px;
-  height: 20px;
-  border: 3px solid #e5e7eb;
-  border-top-color: #667eea;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
+.error-card {
+  background: #fee2e2;
+  border: 2px solid #ef4444;
 }
 
-@keyframes spin {
-  to { transform: rotate(360deg); }
+.error-card h3 {
+  color: #991b1b;
+  margin-bottom: 0.5rem;
+}
+
+.error-card p {
+  color: #b91c1c;
 }
 </style>

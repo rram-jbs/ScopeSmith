@@ -70,6 +70,10 @@ def calculate_project_cost(requirements_data):
     }
 
 def handler(event, context):
+    """
+    AgentCore Action Group Function for Cost Calculation
+    This function is invoked by the Bedrock Agent to calculate project costs
+    """
     try:
         print(f"[COST CALCULATOR] Received event: {json.dumps(event)}")
         
@@ -140,6 +144,40 @@ def handler(event, context):
         # Calculate project cost
         cost_result = calculate_project_cost(requirements_data)
         
+        # Call Amazon Nova Pro to estimate additional costs or validate calculations
+        prompt = f"""Analyze this project data and provide a cost breakdown validation.
+        
+Project Requirements:
+{json.dumps(requirements_data, indent=2)}
+
+Review the estimated costs and provide recommendations for:
+1. Resource allocation optimization
+2. Risk contingency percentage
+3. Hidden costs to consider
+4. Cost-saving opportunities
+
+Return your analysis as a JSON object."""
+        
+        response = bedrock.invoke_model(
+            modelId=os.environ['BEDROCK_MODEL_ID'],
+            contentType='application/json',
+            body=json.dumps({
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}]
+                    }
+                ],
+                "inferenceConfig": {
+                    "max_new_tokens": 1500,
+                    "temperature": 0.5
+                }
+            })
+        )
+        
+        result = json.loads(response['body'].read().decode())
+        ai_insights = result.get('content', [{}])[0].get('text', '{}')
+        
         # Update DynamoDB with cost calculation results
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
@@ -157,7 +195,8 @@ def handler(event, context):
         return format_agent_response(200, {
             'session_id': session_id,
             'message': 'Cost calculation completed successfully',
-            'cost_result': cost_result
+            'cost_result': cost_result,
+            'ai_insights': ai_insights
         })
         
     except Exception as e:

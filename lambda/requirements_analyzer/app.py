@@ -56,7 +56,7 @@ def handler(event, context):
             }
         )
         
-        # Call Claude to analyze requirements
+        # Call Amazon Nova Pro to analyze requirements
         prompt = f"""Analyze these project requirements and extract key information. Return a JSON response with the following structure:
         {{
             "project_scope": "Description of what the project entails",
@@ -75,9 +75,16 @@ def handler(event, context):
             modelId=os.environ['BEDROCK_MODEL_ID'],
             contentType='application/json',
             body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 2000,
-                "messages": [{"role": "user", "content": prompt}]
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}]
+                    }
+                ],
+                "inferenceConfig": {
+                    "max_new_tokens": 2000,
+                    "temperature": 0.7
+                }
             })
         )
         

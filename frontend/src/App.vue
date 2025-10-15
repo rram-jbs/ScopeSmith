@@ -1,79 +1,26 @@
-<script setup>
-import { ref } from 'vue'
-import AssessmentForm from '@/components/AssessmentForm.vue'
-import AgentStatus from '@/components/AgentStatus.vue'
-import ResultsDisplay from '@/components/ResultsDisplay.vue'
-
-const currentView = ref('form') // 'form', 'status', 'results'
-const sessionId = ref(null)
-
-const handleSubmit = (id) => {
-  sessionId.value = id
-  currentView.value = 'status'
-}
-
-const handleComplete = () => {
-  currentView.value = 'results'
-}
-
-const resetToForm = () => {
-  currentView.value = 'form'
-  sessionId.value = null
-}
-</script>
-
 <template>
-  <div class="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-    <header class="bg-white shadow-sm">
-      <div class="max-w-7xl mx-auto py-4 px-6 flex items-center">
-        <img src="/logo.png" alt="ScopeSmith Logo" class="h-16 w-16 mr-4 object-cover rounded-full border-2 border-primary shadow-lg" style="object-position: center;" />
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">ScopeSmith</h1>
-          <p class="text-sm text-gray-600">AI-Powered Proposal Generation</p>
-        </div>
-      </div>
-    </header>
-
-    <main class="max-w-7xl mx-auto py-8 px-6">
-      <transition
-        mode="out-in"
-        enter-active-class="transition ease-out duration-200"
-        enter-from-class="opacity-0 translate-y-1"
-        enter-to-class="opacity-100 translate-y-0"
-        leave-active-class="transition ease-in duration-150"
-        leave-from-class="opacity-100 translate-y-0"
-        leave-to-class="opacity-0 translate-y-1"
-      >
-        <AssessmentForm
-          v-if="currentView === 'form'"
-          @submit="handleSubmit"
-          class="transition-all"
-        />
-        <AgentStatus
-          v-else-if="currentView === 'status'"
-          :session-id="sessionId"
-          @complete="handleComplete"
-          class="transition-all"
-        />
-        <ResultsDisplay
-          v-else-if="currentView === 'results'"
-          :session-id="sessionId"
-          @reset="resetToForm"
-          class="transition-all"
-        />
-      </transition>
-    </main>
-
-    <footer class="mt-auto py-6">
-      <div class="max-w-7xl mx-auto px-6">
-        <p class="text-center text-sm text-gray-500">
-          Built for AWS AI Agent Hackathon 2025
-        </p>
-      </div>
-    </footer>
+  <div id="app">
+    <router-view />
   </div>
 </template>
 
-<style scoped>
-/* Remove .logo class, rely on Tailwind for sizing and spacing */
+<script setup>
+// App wrapper - just renders the router view
+</script>
+
+<style>
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+#app {
+  width: 100%;
+  min-height: 100vh;
+}
 </style>

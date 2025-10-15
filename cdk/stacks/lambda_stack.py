@@ -48,34 +48,20 @@ class LambdaStack(Stack):
             timeout=Duration.seconds(60),
             environment={
                 **common_environment,
-                "BEDROCK_MODEL_ID": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",  # Using inference profile
-                "BEDROCK_AGENT_ID": infra_stack.bedrock_agent_id if hasattr(infra_stack, 'bedrock_agent_id') else "",
-                "BEDROCK_AGENT_ALIAS_ID": infra_stack.bedrock_agent_alias_id if hasattr(infra_stack, 'bedrock_agent_alias_id') else ""
+                "BEDROCK_MODEL_ID": "amazon.nova-pro-v1:0",  # Using Amazon Nova Pro for higher rate limits
             },
             tracing=lambda_.Tracing.ACTIVE
         )
         
-        # Grant Bedrock permissions - foundation models don't include account ID
+        # Grant Bedrock permissions for Amazon Nova Pro
         self.requirements_analyzer.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "bedrock:InvokeModel",
                 "bedrock:InvokeModelWithResponseStream"
             ],
             resources=[
-                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
-                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3*"
-            ]
-        ))
-
-        # Grant Bedrock permissions for inference profiles
-        self.requirements_analyzer.add_to_role_policy(iam.PolicyStatement(
-            actions=[
-                "bedrock:InvokeModel",
-                "bedrock:InvokeModelWithResponseStream"
-            ],
-            resources=[
-                f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
-                f"arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0"
+                f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-pro-v1:0",
+                f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-*"
             ]
         ))
 
@@ -90,19 +76,20 @@ class LambdaStack(Stack):
             environment={
                 **common_environment,
                 "RATE_SHEETS_TABLE_NAME": infra_stack.rate_sheets_table.table_name,
-                "BEDROCK_MODEL_ID": "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+                "BEDROCK_MODEL_ID": "amazon.nova-pro-v1:0"  # Changed from Claude to Nova Pro
             },
             tracing=lambda_.Tracing.ACTIVE
         )
         
-        # Grant Bedrock permissions to Cost Calculator (may use Claude for analysis)
+        # Grant Bedrock permissions to Cost Calculator
         self.cost_calculator.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "bedrock:InvokeModel",
                 "bedrock:InvokeModelWithResponseStream"
             ],
             resources=[
-                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3*"
+                f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-pro-v1:0",
+                f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-*"
             ]
         ))
 
