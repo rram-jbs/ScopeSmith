@@ -9,26 +9,29 @@ def handler(event, context):
     This function is invoked by the Bedrock Agent to retrieve appropriate templates
     """
     try:
-        # Parse input from AgentCore
+        # Handle AgentCore Gateway calls only
         if 'inputText' in event:
-            # Direct invocation from AgentCore
-            input_text = event['inputText']
-            session_id = event.get('sessionId')
-            
-            # Extract parameters from input text or event
-            if 'parameters' in event:
-                parameters = event['parameters']
-                session_id = parameters.get('session_id', session_id)
-                template_type = parameters.get('template_type', 'both')
-            else:
-                template_type = 'both'  # Default to both SOW and PowerPoint
+            try:
+                params = json.loads(event['inputText'])
+                session_id = params['session_id']
+                template_type = params.get('template_type', 'both')
+            except (json.JSONDecodeError, KeyError) as e:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({
+                        'error': f'Invalid input format from AgentCore: {str(e)}'
+                    })
+                }
         else:
-            # Legacy direct invocation support
-            session_id = event['session_id']
-            template_type = event.get('template_type', 'both')
-        
-        if not session_id:
-            raise ValueError("Session ID is required")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Missing required parameters: session_id'
+                })
+            }
+
+        print(f"[TEMPLATE RETRIEVER] Starting template retrieval for session: {session_id}")
+        print(f"[TEMPLATE RETRIEVER] Template type requested: {template_type}")
         
         # Initialize AWS clients
         dynamodb = boto3.client('dynamodb')

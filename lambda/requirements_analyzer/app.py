@@ -5,11 +5,33 @@ from datetime import datetime
 
 def handler(event, context):
     try:
+        # Handle both direct Lambda invocation and AgentCore Gateway calls
+        if 'session_id' in event and 'requirements' in event:
+            session_id = event['session_id']
+            requirements = event['requirements']
+        elif 'inputText' in event:
+            # AgentCore Gateway invocation
+            try:
+                params = json.loads(event['inputText'])
+                session_id = params['session_id']
+                requirements = params['requirements']
+            except (json.JSONDecodeError, KeyError) as e:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({
+                        'error': f'Invalid input format from AgentCore: {str(e)}'
+                    })
+                }
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Missing required parameters: session_id and requirements'
+                })
+            }
+
         print(f"[REQUIREMENTS ANALYZER] Starting requirements analysis")
         print(f"[REQUIREMENTS ANALYZER] Event received: {json.dumps(event)}")
-        
-        session_id = event['session_id']
-        requirements = event['requirements']
         
         print(f"[REQUIREMENTS ANALYZER] Session ID: {session_id}")
         print(f"[REQUIREMENTS ANALYZER] Requirements length: {len(requirements)} characters")

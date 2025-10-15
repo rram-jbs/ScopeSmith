@@ -14,16 +14,266 @@ def get_stack_output(cloudformation, stack_name, output_key):
         print(f"Error getting stack output: {e}")
         return None
 
-def update_session_manager_environment(lambda_client, function_name, agent_id, alias_id):
-    """Update the session manager Lambda function with Bedrock Agent details"""
+def create_gateway_role(iam_client, account_id):
+    """Create IAM role for AgentCore Gateway"""
+    role_name = 'AgentCoreGatewayRole'
+    
+    # Trust policy for Bedrock AgentCore to assume this role
+    trust_policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Principal": {
+                    "Service": "bedrock.amazonaws.com"
+                },
+                "Action": "sts:AssumeRole"
+            }
+        ]
+    }
+    
+    # Permissions policy for invoking Lambda functions
+    permissions_policy = {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "lambda:InvokeFunction"
+                ],
+                "Resource": [
+                    f"arn:aws:lambda:us-east-1:{account_id}:function:ScopeSmithLambda-*"
+                ]
+            },
+            {
+                "Effect": "Allow",
+                "Action": [
+                    "bedrock:*"
+                ],
+                "Resource": "*"
+            }
+        ]
+    }
+    
+    try:
+        # Create the role
+        response = iam_client.create_role(
+            RoleName=role_name,
+            AssumeRolePolicyDocument=json.dumps(trust_policy),
+            Description='IAM role for ScopeSmith AgentCore Gateway'
+        )
+        print(f"✓ Created IAM role: {role_name}")
+        
+        # Attach inline policy
+        iam_client.put_role_policy(
+            RoleName=role_name,
+            PolicyName='AgentCoreGatewayPolicy',
+            PolicyDocument=json.dumps(permissions_policy)
+        )
+        print(f"✓ Attached permissions policy to {role_name}")
+        
+        return response['Role']['Arn']
+        
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'EntityAlreadyExists':
+            print(f"ℹ IAM role {role_name} already exists, using existing role")
+            role = iam_client.get_role(RoleName=role_name)
+            return role['Role']['Arn']
+        else:
+            raise e
+
+def create_agentcore_gateway(bedrock_agent, gateway_role_arn):
+    """Create AgentCore Gateway for Lambda functions"""
+    try:
+        response = bedrock_agent.create_agent_gateway(
+            gatewayName='scopesmith-gateway',
+            description='ScopeSmith Lambda functions exposed as MCP tools',
+            gatewayType='LAMBDA'
+        )
+        
+        gateway_arn = response['agentGateway']['agentGatewayArn']
+        gateway_id = response['agentGateway']['agentGatewayId']
+        
+        print(f"✓ Gateway created successfully!")
+        print(f"  Gateway ARN: {gateway_arn}")
+        print(f"  Gateway ID: {gateway_id}")
+        
+        return gateway_arn, gateway_id
+        
+    except ClientError as e:
+        if 'already exists' in str(e).lower():
+            print(f"ℹ Gateway already exists, skipping creation")
+            # List existing gateways to find ours
+            try:
+                list_response = bedrock_agent.list_agent_gateways()
+                for gw in list_response.get('agentGatewaySummaries', []):
+                    if gw['agentGatewayName'] == 'scopesmith-gateway':
+                        return gw['agentGatewayArn'], gw['agentGatewayId']
+            except:
+                pass
+            return None, None
+        print(f"✗ Error creating gateway: {e}")
+        return None, None
+
+def add_gateway_target(bedrock_agent, gateway_id, target_name, function_arn, input_schema):
+    """Add a Lambda function as a gateway target"""
+    try:
+        bedrock_agent.create_agent_gateway_target(
+            gatewayId=gateway_id,
+            targetName=target_name,
+            targetType='LAMBDA',
+            targetConfiguration={
+                'lambdaConfiguration': {
+                    'lambdaArn': function_arn
+                }
+            },
+            inputSchema=input_schema
+        )
+        print(f"  ✓ Added gateway target: {target_name}")
+        return True
+    except ClientError as e:
+        if 'already exists' in str(e).lower():
+            print(f"  ℹ Target {target_name} already exists")
+            return True
+        print(f"  ✗ Error adding target {target_name}: {e}")
+        return False
+
+def create_agentcore_memory(bedrock_agent, account_id):
+    """Create AgentCore Memory for session context"""
+    try:
+        response = bedrock_agent.create_memory_configuration(
+            memoryConfigurationName='scopesmith-memory',
+            description='Stores requirements, cost data, and template paths across tool invocations',
+            memoryType='SESSION_SUMMARY',
+            memoryCapacityConfiguration={
+                'maxTokens': 4096
+            }
+        )
+        
+        memory_arn = response['memoryConfiguration']['memoryConfigurationArn']
+        memory_id = response['memoryConfiguration']['memoryConfigurationId']
+        
+        print(f"✓ Memory configuration created successfully!")
+        print(f"  Memory ARN: {memory_arn}")
+        print(f"  Memory ID: {memory_id}")
+        
+        return memory_arn, memory_id
+        
+    except ClientError as e:
+        if 'already exists' in str(e).lower():
+            print(f"ℹ Memory configuration already exists, skipping creation")
+            # List existing memory configurations to find ours
+            try:
+                list_response = bedrock_agent.list_memory_configurations()
+                for mem in list_response.get('memoryConfigurations', []):
+                    if mem['memoryConfigurationName'] == 'scopesmith-memory':
+                        return mem['memoryConfigurationArn'], mem['memoryConfigurationId']
+            except:
+                pass
+            return None, None
+        print(f"✗ Error creating memory configuration: {e}")
+        return None, None
+
+def create_agentcore_runtime(bedrock_agent, gateway_arn, memory_arn):
+    """Create AgentCore Runtime for autonomous operation"""
+    try:
+        runtime_instruction = """You are ScopeSmith, an autonomous proposal generation agent. 
+
+Your task: Convert client meeting notes into a complete project proposal (PowerPoint + SOW) in under 3 minutes.
+
+Workflow:
+1. Call analyze_requirements with the meeting notes to extract project scope, timeline, and technical details
+2. Call calculate_project_cost with the extracted requirements to compute costs  
+3. Call retrieve_templates with the project type to find the best templates
+4. Call generate_powerpoint with requirements, costs, and template to create the presentation
+5. Call generate_sow with the same data to create the Statement of Work
+6. Return the S3 URLs for both documents
+
+Use memory to pass data between steps. Work autonomously without asking for clarification."""
+
+        response = bedrock_agent.create_agent_runtime(
+            agentRuntimeName='scopesmith-runtime',
+            description='Autonomous agent that converts meeting notes to complete proposals',
+            foundationModel='anthropic.claude-3-5-sonnet-20241022-v2:0',
+            instruction=runtime_instruction,
+            gatewayConfigurations=[
+                {'gatewayArn': gateway_arn}
+            ],
+            memoryConfiguration={
+                'memoryArn': memory_arn
+            },
+            idleRuntimeSessionTimeout=900
+        )
+        
+        runtime_arn = response['agentRuntime']['agentRuntimeArn']
+        runtime_id = response['agentRuntime']['agentRuntimeId']
+        
+        print(f"✓ Runtime created successfully!")
+        print(f"  Runtime ARN: {runtime_arn}")
+        print(f"  Runtime ID: {runtime_id}")
+        
+        return runtime_arn, runtime_id
+        
+    except ClientError as e:
+        print(f"✗ Error creating runtime: {e}")
+        return None, None
+
+def enable_cloudwatch_logging(logs_client, runtime_arn, account_id):
+    """Enable CloudWatch logging for AgentCore Runtime"""
+    try:
+        runtime_id = runtime_arn.split('/')[-1]
+        log_group_name = f'/aws/vendedlogs/bedrock-agentcore/runtime/{runtime_id}'
+        
+        # Create log group
+        try:
+            logs_client.create_log_group(logGroupName=log_group_name)
+            print(f"✓ Created log group: {log_group_name}")
+        except logs_client.exceptions.ResourceAlreadyExistsException:
+            print(f"ℹ Log group already exists: {log_group_name}")
+        
+        # Create delivery source
+        try:
+            logs_client.put_delivery_source(
+                name=f"{runtime_id}-logs-source",
+                logType="APPLICATION_LOGS",
+                resourceArn=runtime_arn
+            )
+            print(f"✓ Created delivery source")
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                print(f"⚠ Warning creating delivery source: {e}")
+        
+        # Create delivery destination
+        log_group_arn = f'arn:aws:logs:us-east-1:{account_id}:log-group:{log_group_name}'
+        
+        try:
+            logs_client.put_delivery_destination(
+                name=f"{runtime_id}-logs-destination",
+                deliveryDestinationType='CWL',
+                deliveryDestinationConfiguration={'destinationResourceArn': log_group_arn}
+            )
+            print(f"✓ Created delivery destination")
+        except Exception as e:
+            if 'already exists' not in str(e).lower():
+                print(f"⚠ Warning creating delivery destination: {e}")
+        
+        print(f"✓ CloudWatch logging enabled for runtime")
+        return log_group_name
+        
+    except Exception as e:
+        print(f"✗ Error enabling CloudWatch logging: {e}")
+        return None
+
+def update_session_manager_for_runtime(lambda_client, function_name, runtime_arn, runtime_id):
+    """Update session manager to use AgentCore Runtime instead of direct agent invocation"""
     try:
         # Get current function configuration
         response = lambda_client.get_function_configuration(FunctionName=function_name)
         current_env = response.get('Environment', {}).get('Variables', {})
         
-        # Update with Bedrock Agent details
-        current_env['BEDROCK_AGENT_ID'] = agent_id
-        current_env['BEDROCK_AGENT_ALIAS_ID'] = alias_id
+        # Update with Runtime details
+        current_env['AGENTCORE_RUNTIME_ARN'] = runtime_arn
+        current_env['AGENTCORE_RUNTIME_ID'] = runtime_id
         
         # Update the function
         lambda_client.update_function_configuration(
@@ -31,233 +281,12 @@ def update_session_manager_environment(lambda_client, function_name, agent_id, a
             Environment={'Variables': current_env}
         )
         
-        print(f"Updated {function_name} with Agent ID: {agent_id} and Alias ID: {alias_id}")
+        print(f"✓ Updated {function_name} with Runtime ARN and ID")
         return True
         
     except ClientError as e:
-        print(f"Error updating session manager environment: {e}")
+        print(f"✗ Error updating session manager: {e}")
         return False
-
-def grant_lambda_bedrock_permissions(iam_client, lambda_client, function_name, agent_id, alias_id):
-    """Grant the session manager Lambda function permissions to invoke the Bedrock Agent"""
-    try:
-        # Get the Lambda function's role
-        response = lambda_client.get_function(FunctionName=function_name)
-        role_arn = response['Configuration']['Role']
-        role_name = role_arn.split('/')[-1]
-        
-        # Create policy document for Bedrock Agent access
-        policy_document = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock:InvokeAgent"
-                    ],
-                    "Resource": [
-                        f"arn:aws:bedrock:*:*:agent/{agent_id}",
-                        f"arn:aws:bedrock:*:*:agent-alias/{agent_id}/{alias_id}"
-                    ]
-                }
-            ]
-        }
-        
-        # Attach inline policy to the role
-        policy_name = f"BedrockAgent-{agent_id}-Access"
-        iam_client.put_role_policy(
-            RoleName=role_name,
-            PolicyName=policy_name,
-            PolicyDocument=json.dumps(policy_document)
-        )
-        
-        print(f"Granted Bedrock Agent permissions to {function_name}")
-        return True
-        
-    except ClientError as e:
-        print(f"Error granting Bedrock permissions: {e}")
-        return False
-
-def grant_agent_lambda_permissions(lambda_client, agent_id, function_arns):
-    """Grant the Bedrock Agent permissions to invoke Lambda functions"""
-    try:
-        # Get the current AWS account ID and region from one of the function ARNs
-        sample_arn = next(iter(function_arns.values()))
-        arn_parts = sample_arn.split(':')
-        account_id = arn_parts[4]
-        region = arn_parts[3]
-        
-        for function_name, function_arn in function_arns.items():
-            try:
-                # Add permission for Bedrock Agent to invoke the Lambda function
-                # Use specific account ID and region instead of wildcards
-                source_arn = f'arn:aws:bedrock:{region}:{account_id}:agent/{agent_id}'
-                
-                lambda_client.add_permission(
-                    FunctionName=function_arn,
-                    StatementId=f"bedrock-agent-{agent_id}-invoke-{function_name}",
-                    Action='lambda:InvokeFunction',
-                    Principal='bedrock.amazonaws.com',
-                    SourceArn=source_arn
-                )
-                print(f"Granted invoke permission for {function_name} to Bedrock Agent")
-            except ClientError as e:
-                if "ResourceConflictException" in str(e):
-                    print(f"Permission already exists for {function_name}")
-                else:
-                    print(f"Error granting permission for {function_name}: {e}")
-        
-        return True
-        
-    except Exception as e:
-        print(f"Error granting agent Lambda permissions: {e}")
-        return False
-
-def create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction):
-    """Create a Bedrock Agent for ScopeSmith"""
-    try:
-        agent_response = bedrock_agent.create_agent(
-            agentName="ScopeSmithAgent",
-            description="AI agent for analyzing project requirements and generating scopes of work",
-            agentResourceRoleArn=agent_role_arn,  # Fixed: changed from roleArn to agentResourceRoleArn
-            foundationModel="anthropic.claude-3-5-sonnet-20241022-v2:0",  # Fixed: removed inference profile prefix
-            instruction=agent_instruction,
-            idleSessionTTLInSeconds=1800  # 30 minutes
-        )
-        return agent_response['agent']['agentId']
-    except ClientError as e:
-        print(f"Error creating Bedrock agent: {e}")
-        return None
-
-def create_agent_action_group(bedrock_agent, agent_id, function_arn, action_group_name, description, schema):
-    """Create an action group for the Bedrock agent with Lambda function"""
-    try:
-        # Convert our schema to the format expected by Bedrock Agents
-        function_parameters = {}
-        
-        # Add each property as a parameter
-        for prop_name, prop_config in schema['properties'].items():
-            param_type = prop_config['type']
-            
-            # Convert 'object' type to 'string' since Bedrock only supports primitive types
-            if param_type == 'object':
-                param_type = 'string'
-            
-            function_parameters[prop_name] = {
-                'description': prop_config.get('description', f'Parameter {prop_name}'),
-                'type': param_type,
-                'required': prop_name in schema.get('required', [])
-            }
-            
-            # Add enum values to description instead of as separate field
-            if 'enum' in prop_config:
-                enum_values = ', '.join(prop_config['enum'])
-                function_parameters[prop_name]['description'] += f' (allowed values: {enum_values})'
-        
-        response = bedrock_agent.create_agent_action_group(
-            agentId=agent_id,
-            agentVersion="DRAFT",
-            actionGroupName=action_group_name,
-            description=description,
-            actionGroupExecutor={
-                'lambda': function_arn
-            },
-            functionSchema={
-                'functions': [
-                    {
-                        'name': action_group_name.lower(),
-                        'description': description,
-                        'parameters': function_parameters
-                    }
-                ]
-            }
-        )
-        return response['agentActionGroup']['actionGroupId']
-    except ClientError as e:
-        print(f"Error creating action group {action_group_name}: {e}")
-        return None
-
-def wait_for_agent_ready(bedrock_agent, agent_id, max_attempts=12, wait_time=10):
-    """Wait for agent to be in PREPARED or NOT_PREPARED state"""
-    for attempt in range(max_attempts):
-        try:
-            response = bedrock_agent.get_agent(agentId=agent_id)
-            agent_status = response['agent']['agentStatus']
-            print(f"Agent status (attempt {attempt + 1}): {agent_status}")
-            
-            if agent_status in ['PREPARED', 'NOT_PREPARED', 'FAILED']:
-                return agent_status
-            
-            if attempt < max_attempts - 1:
-                print(f"Waiting {wait_time} seconds for agent to be ready...")
-                time.sleep(wait_time)
-                
-        except ClientError as e:
-            print(f"Error checking agent status: {e}")
-            if attempt < max_attempts - 1:
-                time.sleep(wait_time)
-    
-    return None
-
-def prepare_agent(bedrock_agent, agent_id):
-    """Prepare the agent for use"""
-    try:
-        response = bedrock_agent.prepare_agent(agentId=agent_id)
-        return response['agentStatus']
-    except ClientError as e:
-        print(f"Error preparing agent: {e}")
-        return None
-
-def create_agent_alias(bedrock_agent, agent_id):
-    """Create an alias for the agent"""
-    try:
-        response = bedrock_agent.create_agent_alias(
-            agentId=agent_id,
-            agentAliasName="prod",
-            description="Production alias for ScopeSmith agent"
-        )
-        return response['agentAlias']['agentAliasId']
-    except ClientError as e:
-        print(f"Error creating agent alias: {e}")
-        return None
-
-def check_existing_agent(bedrock_agent, agent_name="ScopeSmithAgent"):
-    """Check if an agent with the given name already exists"""
-    try:
-        response = bedrock_agent.list_agents()
-        for agent in response.get('agentSummaries', []):
-            if agent['agentName'] == agent_name:
-                print(f"Found existing agent: {agent_name} (ID: {agent['agentId']})")
-                return agent['agentId']
-        return None
-    except ClientError as e:
-        print(f"Error checking for existing agents: {e}")
-        return None
-
-def get_existing_agent_alias(bedrock_agent, agent_id, alias_name="prod"):
-    """Get existing agent alias if it exists"""
-    try:
-        response = bedrock_agent.list_agent_aliases(agentId=agent_id)
-        for alias in response.get('agentAliasSummaries', []):
-            if alias['agentAliasName'] == alias_name:
-                print(f"Found existing alias: {alias_name} (ID: {alias['agentAliasId']})")
-                return alias['agentAliasId']
-        return None
-    except ClientError as e:
-        print(f"Error checking for existing aliases: {e}")
-        return None
-
-def get_existing_action_groups(bedrock_agent, agent_id):
-    """Get existing action groups for the agent"""
-    try:
-        response = bedrock_agent.list_agent_action_groups(agentId=agent_id, agentVersion="DRAFT")
-        action_groups = {}
-        for ag in response.get('actionGroupSummaries', []):
-            action_groups[ag['actionGroupName']] = ag['actionGroupId']
-        return action_groups
-    except ClientError as e:
-        print(f"Error getting existing action groups: {e}")
-        return {}
 
 def main():
     # Initialize AWS clients
@@ -265,6 +294,7 @@ def main():
     bedrock_agent = boto3.client('bedrock-agent')
     lambda_client = boto3.client('lambda')
     iam_client = boto3.client('iam')
+    logs_client = boto3.client('logs')
 
     # Get Lambda function ARNs from CloudFormation outputs
     lambda_functions = {
@@ -273,14 +303,8 @@ def main():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'requirements': {
-                        'type': 'string',
-                        'description': 'The client requirements to analyze'
-                    },
-                    'session_id': {
-                        'type': 'string', 
-                        'description': 'Unique session identifier'
-                    }
+                    'requirements': {'type': 'string', 'description': 'The client requirements to analyze'},
+                    'session_id': {'type': 'string', 'description': 'Unique session identifier'}
                 },
                 'required': ['requirements', 'session_id']
             }
@@ -290,14 +314,8 @@ def main():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'session_id': {
-                        'type': 'string',
-                        'description': 'Unique session identifier'
-                    },
-                    'requirements_data': {
-                        'type': 'string',
-                        'description': 'JSON string containing analyzed requirements data'
-                    }
+                    'session_id': {'type': 'string', 'description': 'Unique session identifier'},
+                    'requirements_data': {'type': 'string', 'description': 'JSON string containing analyzed requirements data'}
                 },
                 'required': ['session_id', 'requirements_data']
             }
@@ -307,15 +325,8 @@ def main():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'session_id': {
-                        'type': 'string',
-                        'description': 'Unique session identifier'
-                    },
-                    'template_type': {
-                        'type': 'string', 
-                        'enum': ['powerpoint', 'sow'],
-                        'description': 'Type of template to retrieve'
-                    }
+                    'session_id': {'type': 'string', 'description': 'Unique session identifier'},
+                    'template_type': {'type': 'string', 'enum': ['powerpoint', 'sow'], 'description': 'Type of template to retrieve'}
                 },
                 'required': ['session_id', 'template_type']
             }
@@ -325,18 +336,9 @@ def main():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'session_id': {
-                        'type': 'string',
-                        'description': 'Unique session identifier'
-                    },
-                    'template_path': {
-                        'type': 'string',
-                        'description': 'Path to the PowerPoint template'
-                    },
-                    'proposal_data': {
-                        'type': 'string',
-                        'description': 'JSON string containing proposal data for presentation generation'
-                    }
+                    'session_id': {'type': 'string', 'description': 'Unique session identifier'},
+                    'template_path': {'type': 'string', 'description': 'Path to the PowerPoint template'},
+                    'proposal_data': {'type': 'string', 'description': 'JSON string containing proposal data'}
                 },
                 'required': ['session_id', 'template_path', 'proposal_data']
             }
@@ -346,25 +348,16 @@ def main():
             'schema': {
                 'type': 'object',
                 'properties': {
-                    'session_id': {
-                        'type': 'string',
-                        'description': 'Unique session identifier'
-                    },
-                    'template_path': {
-                        'type': 'string',
-                        'description': 'Path to the SOW template'
-                    },
-                    'proposal_data': {
-                        'type': 'string',
-                        'description': 'JSON string containing proposal data for SOW generation'
-                    }
+                    'session_id': {'type': 'string', 'description': 'Unique session identifier'},
+                    'template_path': {'type': 'string', 'description': 'Path to the SOW template'},
+                    'proposal_data': {'type': 'string', 'description': 'JSON string containing proposal data'}
                 },
                 'required': ['session_id', 'template_path', 'proposal_data']
             }
         }
     }
 
-    # Get Lambda function ARNs from CloudFormation stack outputs
+    # Get Lambda function ARNs
     function_arns = {}
     for function_name in lambda_functions.keys():
         arn = get_stack_output(cloudformation, 'ScopeSmithLambda', f'{function_name}FunctionArn')
@@ -381,128 +374,81 @@ def main():
         print("Failed to get Session Manager ARN")
         return
 
-    # Get the Bedrock Agent Role ARN from CloudFormation stack
-    agent_role_arn = get_stack_output(cloudformation, 'ScopeSmithInfrastructure', 'BedrockAgentRoleArn')
-    if not agent_role_arn:
-        print("Failed to get Bedrock Agent Role ARN from CloudFormation stack")
+    account_id = boto3.client('sts').get_caller_identity().get('Account')
+
+    # Create Gateway Role
+    print("\n[1/5] Creating Gateway Role...")
+    gateway_role_arn = create_gateway_role(iam_client, account_id)
+    print(f"✅ Gateway Role ARN: {gateway_role_arn}")
+    
+    # Create AgentCore Gateway
+    print("\n[2/5] Creating AgentCore Gateway...")
+    gateway_arn, gateway_id = create_agentcore_gateway(bedrock_agent, gateway_role_arn)
+    
+    if not gateway_arn or not gateway_id:
+        print("❌ Failed to create AgentCore Gateway")
         return
     
-    print(f"Using Bedrock Agent Role ARN: {agent_role_arn}")
-
-    # Check if agent already exists
-    print("Checking for existing Bedrock Agent...")
-    agent_id = check_existing_agent(bedrock_agent, "ScopeSmithAgent")
+    print(f"✅ Gateway ARN: {gateway_arn}")
+    print(f"✅ Gateway ID: {gateway_id}")
     
-    if agent_id:
-        print(f"✅ Using existing agent with ID: {agent_id}")
-    else:
-        # Create new Bedrock Agent
-        agent_instruction = """You are ScopeSmith, an AI assistant specialized in generating professional proposals and statements of work. 
-        You help analyze client requirements, calculate costs, and generate comprehensive proposals with PowerPoint presentations and SOW documents.
-        
-        Your capabilities include:
-        - Analyzing client requirements and breaking them down into deliverables
-        - Calculating project costs based on standard rate sheets
-        - Retrieving appropriate document templates
-        - Generating customized PowerPoint presentations
-        - Creating detailed Statements of Work
-        
-        Always maintain a professional tone and ensure all outputs are well-structured and comprehensive."""
-
-        print("Creating new Bedrock Agent...")
-        agent_id = create_bedrock_agent(bedrock_agent, agent_role_arn, agent_instruction)
-        if not agent_id:
-            print("Failed to create Bedrock agent")
-            return
-
-        print(f"✅ Created new Bedrock agent with ID: {agent_id}")
-
-    # Grant Lambda functions permission for Bedrock Agent to invoke them
-    print("Granting Bedrock Agent permissions to invoke Lambda functions...")
-    grant_agent_lambda_permissions(lambda_client, agent_id, function_arns)
-
-    # Wait for agent to be ready before creating action groups
-    print("Waiting for agent to be ready...")
-    agent_status = wait_for_agent_ready(bedrock_agent, agent_id)
-    if not agent_status:
-        print("Agent did not reach ready state in time")
-        return
-    
-    print(f"Agent is ready with status: {agent_status}")
-
-    # Check for existing action groups
-    print("Checking for existing action groups...")
-    existing_action_groups = get_existing_action_groups(bedrock_agent, agent_id)
-    
-    # Create action groups for each Lambda function (skip if already exists)
-    action_group_ids = {}
+    # Add Lambda functions as Gateway targets
+    print("\n   Adding Lambda functions as Gateway targets...")
     for function_name, function_data in lambda_functions.items():
-        if function_name in existing_action_groups:
-            print(f"✅ Action group for {function_name} already exists: {existing_action_groups[function_name]}")
-            action_group_ids[function_name] = existing_action_groups[function_name]
-        else:
-            print(f"Creating new action group for {function_name}...")
-            action_group_id = create_agent_action_group(
-                bedrock_agent,
-                agent_id,
-                function_arns[function_name],
-                function_name,
-                function_data['description'],
-                function_data['schema']
-            )
-            if action_group_id:
-                action_group_ids[function_name] = action_group_id
-                print(f"✅ Created action group for {function_name}: {action_group_id}")
-            else:
-                print(f"❌ Failed to create action group for {function_name}")
-
-    # Prepare the agent
-    print("Preparing agent...")
-    status = prepare_agent(bedrock_agent, agent_id)
-    if status:
-        print(f"Agent preparation status: {status}")
-        
-        # Wait for preparation to complete
-        print("Waiting for agent preparation to complete...")
-        time.sleep(30)
-        
-        # Check for existing alias or create new one
-        print("Checking for existing agent alias...")
-        alias_id = get_existing_agent_alias(bedrock_agent, agent_id, "prod")
-        
-        if not alias_id:
-            print("Creating new agent alias...")
-            alias_id = create_agent_alias(bedrock_agent, agent_id)
-            if alias_id:
-                print(f"✅ Created agent alias: {alias_id}")
-            else:
-                print("❌ Failed to create agent alias")
-                return
-        else:
-            print(f"✅ Using existing alias: {alias_id}")
-        
-        # Update Session Manager with Agent details
-        print("Updating Session Manager with Bedrock Agent details...")
-        session_manager_function_name = session_manager_arn.split(':')[-1]
-        
-        if update_session_manager_environment(lambda_client, session_manager_function_name, agent_id, alias_id):
-            print("✅ Successfully updated Session Manager environment variables")
-            
-            # Grant Session Manager permissions to invoke Bedrock Agent
-            print("Granting Session Manager permissions to invoke Bedrock Agent...")
-            grant_lambda_bedrock_permissions(iam_client, lambda_client, session_manager_function_name, agent_id, alias_id)
-            
-            print("\n🎉 Phase 2 AgentCore setup complete!")
-            print(f"✅ Agent ID: {agent_id}")
-            print(f"✅ Agent Alias ID: {alias_id}")
-            print(f"✅ Action Groups: {list(action_group_ids.keys())}")
-            print(f"✅ Session Manager updated with AgentCore configuration")
-            print("\n🚀 Your system is now using AI-orchestrated AgentCore approach!")
-            
-        else:
-            print("❌ Failed to update Session Manager environment")
-    else:
-        print("❌ Failed to prepare agent")
+        add_gateway_target(
+            bedrock_agent,
+            gateway_id,
+            function_name,
+            function_arns[function_name],
+            function_data['schema']
+        )
+    
+    # Create AgentCore Memory
+    print("\n[3/5] Creating AgentCore Memory...")
+    memory_arn, memory_id = create_agentcore_memory(bedrock_agent, account_id)
+    
+    if not memory_arn or not memory_id:
+        print("❌ Failed to create AgentCore Memory")
+        return
+    
+    print(f"✅ Memory ARN: {memory_arn}")
+    
+    # Create AgentCore Runtime
+    print("\n[4/5] Creating AgentCore Runtime...")
+    runtime_arn, runtime_id = create_agentcore_runtime(bedrock_agent, gateway_arn, memory_arn)
+    
+    if not runtime_arn or not runtime_id:
+        print("❌ Failed to create AgentCore Runtime")
+        return
+    
+    print(f"✅ Runtime ARN: {runtime_arn}")
+    print(f"✅ Runtime ID: {runtime_id}")
+    
+    # Enable CloudWatch logging
+    print("\n[5/5] Enabling CloudWatch logging...")
+    log_group_name = enable_cloudwatch_logging(logs_client, runtime_arn, account_id)
+    print(f"✅ CloudWatch Log Group: {log_group_name}")
+    
+    # Update Session Manager to use Runtime
+    print("\n   Updating Session Manager Lambda...")
+    session_manager_function_name = session_manager_arn.split(':')[-1]
+    update_session_manager_for_runtime(
+        lambda_client, session_manager_function_name, runtime_arn, runtime_id
+    )
+    
+    print("\n" + "="*70)
+    print("🎉 AgentCore Runtime Setup Complete!")
+    print("="*70)
+    print(f"\n✅ Gateway ARN: {gateway_arn}")
+    print(f"✅ Gateway ID: {gateway_id}")
+    print(f"✅ Memory ARN: {memory_arn}")
+    print(f"✅ Runtime ARN: {runtime_arn}")
+    print(f"✅ Runtime ID: {runtime_id}")
+    print(f"✅ CloudWatch Log Group: {log_group_name}")
+    print(f"\n✅ Lambda Functions Connected: {list(lambda_functions.keys())}")
+    print("\n🚀 Your ScopeSmith system is now using AgentCore Runtime!")
+    print("   Workflow: Frontend → Session Manager → AgentCore Runtime → Gateway → Lambda Functions")
+    print("="*70)
 
 if __name__ == "__main__":
     main()

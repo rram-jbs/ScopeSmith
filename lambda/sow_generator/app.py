@@ -9,9 +9,31 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def handler(event, context):
     try:
-        session_id = event['session_id']
-        template_path = event['template_path']
-        proposal_data = event['proposal_data']
+        # Handle AgentCore Gateway calls only
+        if 'inputText' in event:
+            try:
+                params = json.loads(event['inputText'])
+                session_id = params['session_id']
+                template_path = params.get('template_path')
+                proposal_data = params.get('proposal_data')
+                if isinstance(proposal_data, str):
+                    proposal_data = json.loads(proposal_data)
+            except (json.JSONDecodeError, KeyError) as e:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({
+                        'error': f'Invalid input format from AgentCore: {str(e)}'
+                    })
+                }
+        else:
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Missing required parameters'
+                })
+            }
+
+        print(f"[SOW GENERATOR] Generating SOW document for session: {session_id}")
         
         s3 = boto3.client('s3')
         dynamodb = boto3.client('dynamodb')
@@ -99,6 +121,7 @@ def handler(event, context):
             'statusCode': 200,
             'body': json.dumps({
                 'session_id': session_id,
+                'message': 'SOW generated successfully',
                 'document_url': presigned_url
             })
         }

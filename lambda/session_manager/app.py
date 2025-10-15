@@ -56,17 +56,24 @@ def get_session_status(session_id):
         'updated_at': item['updated_at']['S']
     }
 
-def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
-    """Invoke the Bedrock Agent to start the AI-orchestrated workflow (Phase 2)"""
-    try:
-        print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
-        print(f"[BEDROCK AGENT] Agent ID: {os.environ.get('BEDROCK_AGENT_ID', 'NOT_SET')}")
-        print(f"[BEDROCK AGENT] Agent Alias ID: {os.environ.get('BEDROCK_AGENT_ALIAS_ID', 'NOT_SET')}")
-        
-        bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
-        
-        # Create the input text for the agent
-        input_text = f"""Please analyze the following client requirements and generate a comprehensive proposal:
+def invoke_agentcore_runtime(session_id, client_name, project_name, industry, requirements, duration, team_size):
+    """Invoke AgentCore Runtime for autonomous proposal generation"""
+    print(f"[AGENTCORE RUNTIME] Starting invocation for session: {session_id}")
+    
+    runtime_arn = os.environ.get('AGENTCORE_RUNTIME_ARN')
+    runtime_id = os.environ.get('AGENTCORE_RUNTIME_ID')
+    
+    if not runtime_arn or not runtime_id:
+        raise ValueError("AgentCore Runtime not configured. Please run setup-agentcore.py script.")
+    
+    print(f"[AGENTCORE RUNTIME] Runtime ARN: {runtime_arn}")
+    print(f"[AGENTCORE RUNTIME] Runtime ID: {runtime_id}")
+    
+    bedrock_agentcore_runtime = boto3.client('bedrock-agentcore-runtime')
+    
+    # Create input payload for runtime
+    input_payload = {
+        'prompt': f"""Convert the following client meeting notes into a complete project proposal:
 
 Client Information:
 - Client Name: {client_name}
@@ -75,58 +82,42 @@ Client Information:
 - Project Duration: {duration}
 - Team Size: {team_size}
 
-Requirements:
+Meeting Notes:
 {requirements}
 
 Session ID: {session_id}
 
-Please perform the following tasks in sequence:
-1. Analyze the requirements and break them down into deliverables, technical requirements, and complexity assessment
-2. Calculate project costs based on the analyzed requirements using standard rate sheets
-3. Retrieve appropriate document templates for both PowerPoint presentation and Statement of Work
-4. Generate a customized PowerPoint presentation with the proposal details
-5. Create a detailed Statement of Work document
-
-Please coordinate these tasks intelligently and update the session status as you progress through each stage."""
-
-        print(f"[BEDROCK AGENT] Sending input text (length: {len(input_text)} chars)")
-        
-        # Invoke the Bedrock Agent
-        response = bedrock_agent_runtime.invoke_agent(
-            agentId=os.environ['BEDROCK_AGENT_ID'],
-            agentAliasId=os.environ['BEDROCK_AGENT_ALIAS_ID'],
-            sessionId=session_id,
-            inputText=input_text
-        )
-        
-        print(f"[BEDROCK AGENT] ✓ Invocation successful for session: {session_id}")
-        print(f"[BEDROCK AGENT] Response type: {type(response)}")
-        print(f"[BEDROCK AGENT] Response keys: {response.keys() if hasattr(response, 'keys') else 'N/A'}")
-        print(f"[BEDROCK AGENT] Full response: {json.dumps(response, default=str, indent=2)}")
-        
-        return response
-        
-    except Exception as e:
-        print(f"[BEDROCK AGENT] ✗ ERROR invoking Bedrock Agent for session {session_id}: {str(e)}")
-        print(f"[BEDROCK AGENT] Error type: {type(e).__name__}")
-        # Update session with error status
-        try:
-            dynamodb = boto3.client('dynamodb')
-            dynamodb.update_item(
-                TableName=os.environ['SESSIONS_TABLE_NAME'],
-                Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={
-                    ':status': {'S': 'ERROR'},
-                    ':error': {'S': f'AgentCore invocation failed: {str(e)}'},
-                    ':ua': {'S': datetime.utcnow().isoformat()}
-                }
-            )
-            print(f"[BEDROCK AGENT] Updated session {session_id} with ERROR status")
-        except Exception as update_error:
-            print(f"[BEDROCK AGENT] Failed to update session with error status: {str(update_error)}")
-        raise e
+Please work autonomously to complete the full proposal workflow."""
+    }
+    
+    print(f"[AGENTCORE RUNTIME] Sending payload to runtime")
+    
+    response = bedrock_agentcore_runtime.invoke_agent_runtime(
+        agentRuntimeArn=runtime_arn,
+        runtimeSessionId=session_id,
+        payload=json.dumps(input_payload).encode()
+    )
+    
+    print(f"[AGENTCORE RUNTIME] Runtime invocation successful")
+    
+    # Process streaming response
+    content = []
+    if "text/event-stream" in response.get("contentType", ""):
+        for line in response["response"].iter_lines(chunk_size=10):
+            if line:
+                line = line.decode("utf-8")
+                if line.startswith("data: "):
+                    line = line[6:]
+                    print(f"[RUNTIME STREAM] {line}")
+                    content.append(line)
+    
+    full_response = "\n".join(content)
+    
+    return {
+        'status': 'completed',
+        'response': full_response,
+        'session_id': session_id
+    }
 
 def create_cors_response(status_code, body):
     """Helper function to create response with CORS headers"""
@@ -161,11 +152,9 @@ def handler(event, context):
                 team_size=body.get('team_size', 1)
             )
             
-            # PHASE 2: Start the AI-orchestrated workflow using Bedrock Agent
             try:
-                # Phase 2: Invoke Bedrock Agent asynchronously
-                print(f"[SESSION] Phase 2: Invoking Bedrock Agent for session: {session_id}")
-                agent_response = invoke_bedrock_agent(
+                print(f"[SESSION] Invoking AgentCore Runtime for session: {session_id}")
+                agent_response = invoke_agentcore_runtime(
                     session_id, 
                     body['client_name'], 
                     body.get('project_name', ''), 
@@ -175,10 +164,9 @@ def handler(event, context):
                     body.get('team_size', 1)
                 )
                 
-                print(f"[SESSION] ✓ Bedrock Agent invocation completed for session: {session_id}")
-                print(f"[SESSION] Agent response received: {json.dumps(agent_response, default=str, indent=2)}")
+                print(f"[SESSION] ✓ AgentCore Runtime invocation completed")
                 
-                # Update status to indicate AgentCore is processing
+                # Update status
                 dynamodb = boto3.client('dynamodb')
                 dynamodb.update_item(
                     TableName=os.environ['SESSIONS_TABLE_NAME'],
@@ -193,28 +181,29 @@ def handler(event, context):
                 
                 return create_cors_response(200, {
                     'session_id': session_id,
-                    'message': 'Assessment started with AgentCore (Phase 2)',
-                    'mode': 'agentcore'
+                    'message': 'Assessment started with AgentCore Runtime'
                 })
                 
             except Exception as e:
-                print(f"AgentCore invocation failed, falling back to Phase 1: {str(e)}")
+                print(f"[SESSION] ✗ AgentCore Runtime invocation failed: {str(e)}")
                 
-                # FALLBACK: Use direct Lambda chain (Phase 1) if AgentCore fails
-                lambda_client = boto3.client('lambda')
-                lambda_client.invoke(
-                    FunctionName=os.environ.get('REQUIREMENTS_ANALYZER_ARN'),
-                    InvocationType='Event',
-                    Payload=json.dumps({
-                        'session_id': session_id,
-                        'requirements': body['requirements']
-                    })
+                # Update session with error
+                dynamodb = boto3.client('dynamodb')
+                dynamodb.update_item(
+                    TableName=os.environ['SESSIONS_TABLE_NAME'],
+                    Key={'session_id': {'S': session_id}},
+                    UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': {'S': 'ERROR'},
+                        ':error': {'S': f'AgentCore Runtime invocation failed: {str(e)}'},
+                        ':ua': {'S': datetime.utcnow().isoformat()}
+                    }
                 )
                 
-                return create_cors_response(200, {
+                return create_cors_response(500, {
                     'session_id': session_id,
-                    'message': 'Assessment started with direct chain (Phase 1 fallback)',
-                    'mode': 'fallback'
+                    'error': str(e)
                 })
             
         elif http_method == 'GET' and '/api/agent-status/' in path:
@@ -236,7 +225,7 @@ def handler(event, context):
                 return create_cors_response(200, {
                     'powerpoint_url': next((url for url in status['document_urls'] if 'pptx' in url.lower()), None),
                     'sow_url': next((url for url in status['document_urls'] if 'sow' in url.lower()), None),
-                    'cost_data': json.loads(status.get('cost_data', '{}'))
+                    'cost_data': status.get('cost_data', {})
                 })
             else:
                 return create_cors_response(404, {
@@ -245,17 +234,15 @@ def handler(event, context):
         
         elif http_method == 'POST' and path == '/api/upload-template':
             # Handle template upload
-            if 'file' not in event['multiValueHeaders']:
+            if 'file' not in event.get('multiValueHeaders', {}):
                 return create_cors_response(400, {
                     'error': 'No file provided'
                 })
                 
-            # Process file upload using S3
             s3 = boto3.client('s3')
             file_content = event['body']
             file_name = event['multiValueHeaders']['file'][0]
             
-            # Upload to templates bucket
             s3.put_object(
                 Bucket=os.environ['TEMPLATES_BUCKET_NAME'],
                 Key=f'templates/{file_name}',
@@ -272,6 +259,7 @@ def handler(event, context):
         })
         
     except Exception as e:
+        print(f"[SESSION] ✗ Unexpected error: {str(e)}")
         return create_cors_response(500, {
             'error': str(e)
         })

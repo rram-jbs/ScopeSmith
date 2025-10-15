@@ -70,30 +70,31 @@ def calculate_project_cost(requirements_data):
     }
 
 def handler(event, context):
-    """
-    AgentCore Action Group Function for Cost Calculation
-    This function is invoked by the Bedrock Agent to calculate project costs
-    """
     try:
-        # Parse input from AgentCore
+        # Handle AgentCore Gateway calls only
         if 'inputText' in event:
-            # Direct invocation from AgentCore
-            input_text = event['inputText']
-            session_id = event.get('sessionId')
-            
-            # Extract parameters from input text or event
-            if 'parameters' in event:
-                parameters = event['parameters']
-                session_id = parameters.get('session_id', session_id)
-            else:
-                # Try to extract session_id from input text if provided
-                pass
+            try:
+                params = json.loads(event['inputText'])
+                session_id = params['session_id']
+                requirements_data = params.get('requirements_data')
+                if isinstance(requirements_data, str):
+                    requirements_data = json.loads(requirements_data)
+            except (json.JSONDecodeError, KeyError) as e:
+                return {
+                    'statusCode': 400,
+                    'body': json.dumps({
+                        'error': f'Invalid input format from AgentCore: {str(e)}'
+                    })
+                }
         else:
-            # Legacy direct invocation support
-            session_id = event['session_id']
-        
-        if not session_id:
-            raise ValueError("Session ID is required")
+            return {
+                'statusCode': 400,
+                'body': json.dumps({
+                    'error': 'Missing required parameters: session_id and requirements_data'
+                })
+            }
+
+        print(f"[COST CALCULATOR] Starting cost calculation for session: {session_id}")
         
         # Initialize AWS clients
         dynamodb = boto3.client('dynamodb')
