@@ -56,6 +56,65 @@ def get_session_status(session_id):
         'updated_at': item['updated_at']['S']
     }
 
+def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
+    """Invoke the Bedrock Agent to start the AI-orchestrated workflow (Phase 2)"""
+    try:
+        bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
+        
+        # Create the input text for the agent
+        input_text = f"""Please analyze the following client requirements and generate a comprehensive proposal:
+
+Client Information:
+- Client Name: {client_name}
+- Project Name: {project_name}
+- Industry: {industry}
+- Project Duration: {duration}
+- Team Size: {team_size}
+
+Requirements:
+{requirements}
+
+Session ID: {session_id}
+
+Please perform the following tasks in sequence:
+1. Analyze the requirements and break them down into deliverables, technical requirements, and complexity assessment
+2. Calculate project costs based on the analyzed requirements using standard rate sheets
+3. Retrieve appropriate document templates for both PowerPoint presentation and Statement of Work
+4. Generate a customized PowerPoint presentation with the proposal details
+5. Create a detailed Statement of Work document
+
+Please coordinate these tasks intelligently and update the session status as you progress through each stage."""
+
+        # Invoke the Bedrock Agent
+        response = bedrock_agent_runtime.invoke_agent(
+            agentId=os.environ['BEDROCK_AGENT_ID'],
+            agentAliasId=os.environ['BEDROCK_AGENT_ALIAS_ID'],
+            sessionId=session_id,
+            inputText=input_text
+        )
+        
+        return response
+        
+    except Exception as e:
+        print(f"Error invoking Bedrock Agent: {str(e)}")
+        # Update session with error status
+        try:
+            dynamodb = boto3.client('dynamodb')
+            dynamodb.update_item(
+                TableName=os.environ['SESSIONS_TABLE_NAME'],
+                Key={'session_id': {'S': session_id}},
+                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={
+                    ':status': {'S': 'ERROR'},
+                    ':error': {'S': f'AgentCore invocation failed: {str(e)}'},
+                    ':ua': {'S': datetime.utcnow().isoformat()}
+                }
+            )
+        except:
+            pass
+        raise e
+
 def create_cors_response(status_code, body):
     """Helper function to create response with CORS headers"""
     return {
@@ -89,21 +148,56 @@ def handler(event, context):
                 team_size=body.get('team_size', 1)
             )
             
-            # Start the workflow by invoking the requirements analyzer
-            lambda_client = boto3.client('lambda')
-            lambda_client.invoke(
-                FunctionName=os.environ.get('REQUIREMENTS_ANALYZER_ARN'),
-                InvocationType='Event',
-                Payload=json.dumps({
+            # PHASE 2: Start the AI-orchestrated workflow using Bedrock Agent
+            try:
+                agent_response = invoke_bedrock_agent(
+                    session_id=session_id,
+                    client_name=body['client_name'],
+                    project_name=body.get('project_name', ''),
+                    industry=body.get('industry', ''),
+                    requirements=body['requirements'],
+                    duration=body.get('duration', ''),
+                    team_size=body.get('team_size', 1)
+                )
+                
+                # Update status to indicate AgentCore is processing
+                dynamodb = boto3.client('dynamodb')
+                dynamodb.update_item(
+                    TableName=os.environ['SESSIONS_TABLE_NAME'],
+                    Key={'session_id': {'S': session_id}},
+                    UpdateExpression='SET #status = :status, updated_at = :ua',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': {'S': 'AGENTCORE_PROCESSING'},
+                        ':ua': {'S': datetime.utcnow().isoformat()}
+                    }
+                )
+                
+                return create_cors_response(200, {
                     'session_id': session_id,
-                    'requirements': body['requirements']
+                    'message': 'Assessment started with AgentCore (Phase 2)',
+                    'mode': 'agentcore'
                 })
-            )
-            
-            return create_cors_response(200, {
-                'session_id': session_id,
-                'message': 'Assessment started'
-            })
+                
+            except Exception as e:
+                print(f"AgentCore invocation failed, falling back to Phase 1: {str(e)}")
+                
+                # FALLBACK: Use direct Lambda chain (Phase 1) if AgentCore fails
+                lambda_client = boto3.client('lambda')
+                lambda_client.invoke(
+                    FunctionName=os.environ.get('REQUIREMENTS_ANALYZER_ARN'),
+                    InvocationType='Event',
+                    Payload=json.dumps({
+                        'session_id': session_id,
+                        'requirements': body['requirements']
+                    })
+                )
+                
+                return create_cors_response(200, {
+                    'session_id': session_id,
+                    'message': 'Assessment started with direct chain (Phase 1 fallback)',
+                    'mode': 'fallback'
+                })
             
         elif http_method == 'GET' and '/api/agent-status/' in path:
             session_id = event['pathParameters']['session_id']

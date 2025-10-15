@@ -4,14 +4,35 @@ import boto3
 from datetime import datetime
 
 def handler(event, context):
+    """
+    AgentCore Action Group Function for Requirements Analysis
+    This function is invoked by the Bedrock Agent to analyze project requirements
+    """
     try:
-        session_id = event['session_id']
-        requirements = event['requirements']
+        # Parse input from AgentCore
+        if 'inputText' in event:
+            # Direct invocation from AgentCore
+            input_text = event['inputText']
+            session_id = event.get('sessionId')
+            
+            # Extract parameters from input text or event
+            if 'parameters' in event:
+                parameters = event['parameters']
+                requirements = parameters.get('requirements', input_text)
+                session_id = parameters.get('session_id', session_id)
+            else:
+                requirements = input_text
+        else:
+            # Legacy direct invocation support
+            session_id = event['session_id']
+            requirements = event['requirements']
+        
+        if not session_id:
+            raise ValueError("Session ID is required")
         
         # Initialize AWS clients
         bedrock = boto3.client('bedrock-runtime')
         dynamodb = boto3.client('dynamodb')
-        lambda_client = boto3.client('lambda')
         
         # Update status to analyzing
         dynamodb.update_item(
@@ -86,23 +107,14 @@ def handler(event, context):
             }
         )
         
-        # Invoke cost calculator with the analysis results
-        if os.environ.get('COST_CALCULATOR_ARN'):
-            lambda_client.invoke(
-                FunctionName=os.environ['COST_CALCULATOR_ARN'],
-                InvocationType='Event',
-                Payload=json.dumps({
-                    'session_id': session_id,
-                    'requirements_data': analysis_result
-                })
-            )
-        
+        # Return response in AgentCore format
         return {
             'statusCode': 200,
             'body': json.dumps({
                 'session_id': session_id,
-                'message': 'Requirements analysis complete',
-                'analysis_result': analysis_result
+                'message': 'Requirements analysis completed successfully',
+                'analysis_result': analysis_result,
+                'next_action': 'The requirements have been analyzed. You can now proceed with cost calculation using the analyze results.'
             })
         }
         
@@ -127,6 +139,6 @@ def handler(event, context):
         return {
             'statusCode': 500,
             'body': json.dumps({
-                'error': str(e)
+                'error': f'Requirements analysis failed: {str(e)}'
             })
         }

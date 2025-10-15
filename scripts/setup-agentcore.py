@@ -14,6 +14,96 @@ def get_stack_output(cloudformation, stack_name, output_key):
         print(f"Error getting stack output: {e}")
         return None
 
+def update_session_manager_environment(lambda_client, function_name, agent_id, alias_id):
+    """Update the session manager Lambda function with Bedrock Agent details"""
+    try:
+        # Get current function configuration
+        response = lambda_client.get_function_configuration(FunctionName=function_name)
+        current_env = response.get('Environment', {}).get('Variables', {})
+        
+        # Update with Bedrock Agent details
+        current_env['BEDROCK_AGENT_ID'] = agent_id
+        current_env['BEDROCK_AGENT_ALIAS_ID'] = alias_id
+        
+        # Update the function
+        lambda_client.update_function_configuration(
+            FunctionName=function_name,
+            Environment={'Variables': current_env}
+        )
+        
+        print(f"Updated {function_name} with Agent ID: {agent_id} and Alias ID: {alias_id}")
+        return True
+        
+    except ClientError as e:
+        print(f"Error updating session manager environment: {e}")
+        return False
+
+def grant_lambda_bedrock_permissions(iam_client, lambda_client, function_name, agent_id, alias_id):
+    """Grant the session manager Lambda function permissions to invoke the Bedrock Agent"""
+    try:
+        # Get the Lambda function's role
+        response = lambda_client.get_function(FunctionName=function_name)
+        role_arn = response['Configuration']['Role']
+        role_name = role_arn.split('/')[-1]
+        
+        # Create policy document for Bedrock Agent access
+        policy_document = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "bedrock:InvokeAgent"
+                    ],
+                    "Resource": [
+                        f"arn:aws:bedrock:*:*:agent/{agent_id}",
+                        f"arn:aws:bedrock:*:*:agent-alias/{agent_id}/{alias_id}"
+                    ]
+                }
+            ]
+        }
+        
+        # Attach inline policy to the role
+        policy_name = f"BedrockAgent-{agent_id}-Access"
+        iam_client.put_role_policy(
+            RoleName=role_name,
+            PolicyName=policy_name,
+            PolicyDocument=json.dumps(policy_document)
+        )
+        
+        print(f"Granted Bedrock Agent permissions to {function_name}")
+        return True
+        
+    except ClientError as e:
+        print(f"Error granting Bedrock permissions: {e}")
+        return False
+
+def grant_agent_lambda_permissions(lambda_client, agent_id, function_arns):
+    """Grant the Bedrock Agent permissions to invoke Lambda functions"""
+    try:
+        for function_name, function_arn in function_arns.items():
+            try:
+                # Add permission for Bedrock Agent to invoke the Lambda function
+                lambda_client.add_permission(
+                    FunctionName=function_arn,
+                    StatementId=f"bedrock-agent-{agent_id}-invoke-{function_name}",
+                    Action='lambda:InvokeFunction',
+                    Principal='bedrock.amazonaws.com',
+                    SourceArn=f'arn:aws:bedrock:*:*:agent/{agent_id}'
+                )
+                print(f"Granted invoke permission for {function_name} to Bedrock Agent")
+            except ClientError as e:
+                if "ResourceConflictException" in str(e):
+                    print(f"Permission already exists for {function_name}")
+                else:
+                    print(f"Error granting permission for {function_name}: {e}")
+        
+        return True
+        
+    except Exception as e:
+        print(f"Error granting agent Lambda permissions: {e}")
+        return False
+
 def create_bedrock_agent(bedrock_agent):
     """Create a Bedrock Agent for ScopeSmith"""
     try:
@@ -135,6 +225,8 @@ def main():
     # Initialize AWS clients
     cloudformation = boto3.client('cloudformation')
     bedrock_agent = boto3.client('bedrock-agent')
+    lambda_client = boto3.client('lambda')
+    iam_client = boto3.client('iam')
 
     # Get Lambda function ARNs from CloudFormation outputs
     lambda_functions = {
@@ -245,6 +337,12 @@ def main():
             print(f"Failed to get ARN for {function_name}")
             return
 
+    # Get Session Manager ARN
+    session_manager_arn = get_stack_output(cloudformation, 'ScopeSmithLambda', 'SessionManagerFunctionArn')
+    if not session_manager_arn:
+        print("Failed to get Session Manager ARN")
+        return
+
     # Create Bedrock Agent
     print("Creating Bedrock Agent...")
     agent_id = create_bedrock_agent(bedrock_agent)
@@ -253,6 +351,10 @@ def main():
         return
 
     print(f"Created Bedrock agent with ID: {agent_id}")
+
+    # Grant Lambda functions permission for Bedrock Agent to invoke them
+    print("Granting Bedrock Agent permissions to invoke Lambda functions...")
+    grant_agent_lambda_permissions(lambda_client, agent_id, function_arns)
 
     # Wait for agent to be ready before creating action groups
     print("Waiting for agent to be ready...")
@@ -296,14 +398,31 @@ def main():
         alias_id = create_agent_alias(bedrock_agent, agent_id)
         if alias_id:
             print(f"Created agent alias: {alias_id}")
+            
+            # Update Session Manager with Agent details
+            print("Updating Session Manager with Bedrock Agent details...")
+            session_manager_function_name = session_manager_arn.split(':')[-1]
+            
+            if update_session_manager_environment(lambda_client, session_manager_function_name, agent_id, alias_id):
+                print("Successfully updated Session Manager environment variables")
+                
+                # Grant Session Manager permissions to invoke Bedrock Agent
+                print("Granting Session Manager permissions to invoke Bedrock Agent...")
+                grant_lambda_bedrock_permissions(iam_client, lambda_client, session_manager_function_name, agent_id, alias_id)
+                
+                print("🎉 Phase 2 AgentCore setup complete!")
+                print(f"✅ Agent ID: {agent_id}")
+                print(f"✅ Agent Alias ID: {alias_id}")
+                print(f"✅ Action Groups: {list(action_group_ids.keys())}")
+                print(f"✅ Session Manager updated with AgentCore configuration")
+                print("\n🚀 Your system is now using AI-orchestrated AgentCore approach!")
+                
+            else:
+                print("Failed to update Session Manager environment")
         else:
             print("Failed to create agent alias")
     else:
         print("Failed to prepare agent")
-
-    print("Bedrock Agent setup complete!")
-    print(f"Agent ID: {agent_id}")
-    print(f"Action Groups: {list(action_group_ids.keys())}")
 
 if __name__ == "__main__":
     main()

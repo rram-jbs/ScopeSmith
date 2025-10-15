@@ -4,58 +4,204 @@ import boto3
 from datetime import datetime
 
 def handler(event, context):
+    """
+    AgentCore Action Group Function for Template Retrieval
+    This function is invoked by the Bedrock Agent to retrieve appropriate templates
+    """
     try:
-        session_id = event['session_id']
-        template_type = event['template_type']
+        # Parse input from AgentCore
+        if 'inputText' in event:
+            # Direct invocation from AgentCore
+            input_text = event['inputText']
+            session_id = event.get('sessionId')
+            
+            # Extract parameters from input text or event
+            if 'parameters' in event:
+                parameters = event['parameters']
+                session_id = parameters.get('session_id', session_id)
+                template_type = parameters.get('template_type', 'both')
+            else:
+                template_type = 'both'  # Default to both SOW and PowerPoint
+        else:
+            # Legacy direct invocation support
+            session_id = event['session_id']
+            template_type = event.get('template_type', 'both')
         
-        s3 = boto3.client('s3')
+        if not session_id:
+            raise ValueError("Session ID is required")
+        
+        # Initialize AWS clients
         dynamodb = boto3.client('dynamodb')
+        s3 = boto3.client('s3')
         
-        # List available templates
-        response = s3.list_objects_v2(
-            Bucket=os.environ['TEMPLATES_BUCKET_NAME'],
-            Prefix=f"{template_type}/"
+        # Update status to retrieving templates
+        dynamodb.update_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}},
+            UpdateExpression='SET #status = :status, updated_at = :ua',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':status': {'S': 'RETRIEVING_TEMPLATES'},
+                ':ua': {'S': datetime.utcnow().isoformat()}
+            }
         )
         
-        templates = []
-        if 'Contents' in response:
-            templates = [item['Key'] for item in response['Contents']]
+        # Get session data to understand project requirements
+        response = dynamodb.get_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}}
+        )
         
-        # For this example, we'll select the first template
-        selected_template = templates[0] if templates else None
+        if 'Item' not in response:
+            raise ValueError(f"Session {session_id} not found")
         
-        if selected_template:
-            # Update session with template path
+        session_data = response['Item']
+        requirements_data_str = session_data.get('requirements_data', {}).get('S', '{}')
+        cost_data_str = session_data.get('cost_data', {}).get('S', '{}')
+        
+        try:
+            requirements_data = json.loads(requirements_data_str)
+            cost_data = json.loads(cost_data_str)
+        except json.JSONDecodeError:
+            requirements_data = {}
+            cost_data = {}
+        
+        # Get available templates from S3
+        template_bucket = os.environ.get('TEMPLATE_BUCKET_NAME')
+        templates = {}
+        
+        if template_type in ['sow', 'both']:
+            try:
+                # List SOW templates
+                sow_response = s3.list_objects_v2(
+                    Bucket=template_bucket,
+                    Prefix='sow-templates/'
+                )
+                
+                sow_templates = []
+                if 'Contents' in sow_response:
+                    for obj in sow_response['Contents']:
+                        if obj['Key'].endswith('.docx'):
+                            template_name = obj['Key'].split('/')[-1].replace('.docx', '')
+                            sow_templates.append({
+                                'name': template_name,
+                                'key': obj['Key'],
+                                'size': obj['Size'],
+                                'last_modified': obj['LastModified'].isoformat()
+                            })
+                
+                templates['sow'] = sow_templates
+            except Exception as e:
+                templates['sow'] = []
+                print(f"Error retrieving SOW templates: {e}")
+        
+        if template_type in ['powerpoint', 'both']:
+            try:
+                # List PowerPoint templates
+                ppt_response = s3.list_objects_v2(
+                    Bucket=template_bucket,
+                    Prefix='powerpoint-templates/'
+                )
+                
+                ppt_templates = []
+                if 'Contents' in ppt_response:
+                    for obj in ppt_response['Contents']:
+                        if obj['Key'].endswith('.pptx'):
+                            template_name = obj['Key'].split('/')[-1].replace('.pptx', '')
+                            ppt_templates.append({
+                                'name': template_name,
+                                'key': obj['Key'],
+                                'size': obj['Size'],
+                                'last_modified': obj['LastModified'].isoformat()
+                            })
+                
+                templates['powerpoint'] = ppt_templates
+            except Exception as e:
+                templates['powerpoint'] = []
+                print(f"Error retrieving PowerPoint templates: {e}")
+        
+        # Select most appropriate templates based on project characteristics
+        selected_templates = select_best_templates(templates, requirements_data, cost_data)
+        
+        # Update DynamoDB with template information
+        dynamodb.update_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}},
+            UpdateExpression='SET template_data = :td, #status = :status, updated_at = :ua',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':td': {'S': json.dumps(selected_templates)},
+                ':status': {'S': 'TEMPLATES_RETRIEVED'},
+                ':ua': {'S': datetime.utcnow().isoformat()}
+            }
+        )
+        
+        # Return response in AgentCore format
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'session_id': session_id,
+                'message': 'Templates retrieved successfully',
+                'templates': selected_templates,
+                'next_action': 'Templates have been selected. You can now proceed with document generation (SOW and/or PowerPoint).'
+            })
+        }
+        
+    except Exception as e:
+        # Update session with error status
+        try:
+            dynamodb = boto3.client('dynamodb')
             dynamodb.update_item(
                 TableName=os.environ['SESSIONS_TABLE_NAME'],
                 Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET template_paths = list_append(if_not_exists(template_paths, :empty), :tp), updated_at = :ua',
+                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+                ExpressionAttributeNames={'#status': 'status'},
                 ExpressionAttributeValues={
-                    ':tp': {'L': [{'S': selected_template}]},
-                    ':empty': {'L': []},
+                    ':status': {'S': 'ERROR'},
+                    ':error': {'S': f'Template retrieval failed: {str(e)}'},
                     ':ua': {'S': datetime.utcnow().isoformat()}
                 }
             )
+        except:
+            pass
             
-            return {
-                'statusCode': 200,
-                'body': json.dumps({
-                    'session_id': session_id,
-                    'template_path': selected_template
-                })
-            }
-        else:
-            return {
-                'statusCode': 404,
-                'body': json.dumps({
-                    'error': f'No templates found for type: {template_type}'
-                })
-            }
-        
-    except Exception as e:
         return {
             'statusCode': 500,
             'body': json.dumps({
-                'error': str(e)
+                'error': f'Template retrieval failed: {str(e)}'
             })
         }
+
+def select_best_templates(templates, requirements_data, cost_data):
+    """Select the most appropriate templates based on project characteristics"""
+    selected = {}
+    
+    # Simple template selection logic - in a real implementation, this would be more sophisticated
+    complexity = requirements_data.get('complexity_level', 'Medium')
+    total_cost = cost_data.get('total_cost', 50000)
+    
+    # Select SOW template
+    if 'sow' in templates and templates['sow']:
+        # For now, select the first available template
+        # In practice, you'd match based on complexity, cost, industry, etc.
+        if complexity == 'High' or total_cost > 100000:
+            # Try to find enterprise template
+            enterprise_template = next((t for t in templates['sow'] if 'enterprise' in t['name'].lower()), None)
+            selected['sow'] = enterprise_template or templates['sow'][0]
+        else:
+            # Use standard template
+            standard_template = next((t for t in templates['sow'] if 'standard' in t['name'].lower()), None)
+            selected['sow'] = standard_template or templates['sow'][0]
+    
+    # Select PowerPoint template
+    if 'powerpoint' in templates and templates['powerpoint']:
+        if complexity == 'High' or total_cost > 100000:
+            # Try to find detailed template
+            detailed_template = next((t for t in templates['powerpoint'] if 'detailed' in t['name'].lower()), None)
+            selected['powerpoint'] = detailed_template or templates['powerpoint'][0]
+        else:
+            # Use standard template
+            standard_template = next((t for t in templates['powerpoint'] if 'standard' in t['name'].lower()), None)
+            selected['powerpoint'] = standard_template or templates['powerpoint'][0]
+    
+    return selected

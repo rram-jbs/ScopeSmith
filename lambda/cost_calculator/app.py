@@ -36,54 +36,69 @@ def calculate_project_cost(requirements_data):
         "senior_developer": {
             "hours": int(total_hours * 0.4),
             "rate": default_rates["senior_developer"],
-            "total": 0
+            "amount": int(total_hours * 0.4) * default_rates["senior_developer"]
         },
         "junior_developer": {
             "hours": int(total_hours * 0.3),
             "rate": default_rates["junior_developer"],
-            "total": 0
+            "amount": int(total_hours * 0.3) * default_rates["junior_developer"]
         },
         "project_manager": {
             "hours": int(total_hours * 0.15),
             "rate": default_rates["project_manager"],
-            "total": 0
+            "amount": int(total_hours * 0.15) * default_rates["project_manager"]
         },
         "designer": {
-            "hours": int(total_hours * 0.1),
+            "hours": int(total_hours * 0.10),
             "rate": default_rates["designer"],
-            "total": 0
+            "amount": int(total_hours * 0.10) * default_rates["designer"]
         },
         "qa_engineer": {
             "hours": int(total_hours * 0.05),
             "rate": default_rates["qa_engineer"],
-            "total": 0
+            "amount": int(total_hours * 0.05) * default_rates["qa_engineer"]
         }
     }
     
-    # Calculate totals
-    total_cost = 0
-    for role, data in cost_breakdown.items():
-        data["total"] = data["hours"] * data["rate"]
-        total_cost += data["total"]
+    total_cost = sum(role["amount"] for role in cost_breakdown.values())
     
     return {
         "total_hours": total_hours,
         "total_cost": total_cost,
-        "cost_breakdown": cost_breakdown,
         "complexity_level": complexity,
-        "project_duration_weeks": max(4, total_hours // 40)
+        "cost_breakdown": cost_breakdown
     }
 
 def handler(event, context):
+    """
+    AgentCore Action Group Function for Cost Calculation
+    This function is invoked by the Bedrock Agent to calculate project costs
+    """
     try:
-        session_id = event['session_id']
-        requirements_data = event['requirements_data']
+        # Parse input from AgentCore
+        if 'inputText' in event:
+            # Direct invocation from AgentCore
+            input_text = event['inputText']
+            session_id = event.get('sessionId')
+            
+            # Extract parameters from input text or event
+            if 'parameters' in event:
+                parameters = event['parameters']
+                session_id = parameters.get('session_id', session_id)
+            else:
+                # Try to extract session_id from input text if provided
+                pass
+        else:
+            # Legacy direct invocation support
+            session_id = event['session_id']
+        
+        if not session_id:
+            raise ValueError("Session ID is required")
         
         # Initialize AWS clients
         dynamodb = boto3.client('dynamodb')
-        lambda_client = boto3.client('lambda')
         
-        # Update status
+        # Update status to calculating costs
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
             Key={'session_id': {'S': session_id}},
@@ -95,39 +110,47 @@ def handler(event, context):
             }
         )
         
-        # Calculate project costs
-        cost_data = calculate_project_cost(requirements_data)
+        # Get requirements data from session
+        response = dynamodb.get_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}}
+        )
         
-        # Update DynamoDB with cost data
+        if 'Item' not in response:
+            raise ValueError(f"Session {session_id} not found")
+        
+        session_data = response['Item']
+        requirements_data_str = session_data.get('requirements_data', {}).get('S', '{}')
+        
+        try:
+            requirements_data = json.loads(requirements_data_str)
+        except json.JSONDecodeError:
+            raise ValueError("Invalid requirements data format")
+        
+        # Calculate project cost
+        cost_result = calculate_project_cost(requirements_data)
+        
+        # Update DynamoDB with cost calculation results
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
             Key={'session_id': {'S': session_id}},
             UpdateExpression='SET cost_data = :cd, #status = :status, updated_at = :ua',
             ExpressionAttributeNames={'#status': 'status'},
             ExpressionAttributeValues={
-                ':cd': {'S': json.dumps(cost_data)},
+                ':cd': {'S': json.dumps(cost_result)},
                 ':status': {'S': 'COSTS_CALCULATED'},
                 ':ua': {'S': datetime.utcnow().isoformat()}
             }
         )
         
-        # Invoke template retriever to get templates
-        if os.environ.get('TEMPLATE_RETRIEVER_ARN'):
-            lambda_client.invoke(
-                FunctionName=os.environ['TEMPLATE_RETRIEVER_ARN'],
-                InvocationType='Event',
-                Payload=json.dumps({
-                    'session_id': session_id,
-                    'template_type': 'both'  # Request both PowerPoint and SOW templates
-                })
-            )
-        
+        # Return response in AgentCore format
         return {
             'statusCode': 200,
             'body': json.dumps({
                 'session_id': session_id,
-                'message': 'Cost calculation complete',
-                'cost_data': cost_data
+                'message': 'Cost calculation completed successfully',
+                'cost_result': cost_result,
+                'next_action': 'Costs have been calculated. You can now proceed with template retrieval and document generation.'
             })
         }
         
@@ -152,6 +175,6 @@ def handler(event, context):
         return {
             'statusCode': 500,
             'body': json.dumps({
-                'error': str(e)
+                'error': f'Cost calculation failed: {str(e)}'
             })
         }
