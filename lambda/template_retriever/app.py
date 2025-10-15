@@ -173,12 +173,12 @@ def format_agent_response(status_code, body):
         'messageVersion': '1.0',
         'response': {
             'actionGroup': 'TemplateRetriever',
-            'apiPath': '/retrieve',
-            'httpMethod': 'POST',
-            'httpStatusCode': status_code,
-            'responseBody': {
-                'application/json': {
-                    'body': body_text
+            'function': 'templateretriever',  # Must match function name in action group
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {
+                        'body': body_text
+                    }
                 }
             }
         }

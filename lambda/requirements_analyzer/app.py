@@ -129,16 +129,17 @@ def format_agent_response(status_code, body):
         body_text = str(body)
     
     # Bedrock Agent expects this specific format
+    # The apiPath and function must match what was defined in the action group
     return {
         'messageVersion': '1.0',
         'response': {
             'actionGroup': 'RequirementsAnalyzer',
-            'apiPath': '/analyze',
-            'httpMethod': 'POST',
-            'httpStatusCode': status_code,
-            'responseBody': {
-                'application/json': {
-                    'body': body_text
+            'function': 'requirementsanalyzer',  # Must match function name in action group
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {
+                        'body': body_text
+                    }
                 }
             }
         }

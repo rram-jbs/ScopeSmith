@@ -117,12 +117,12 @@ def format_agent_response(status_code, body):
         'messageVersion': '1.0',
         'response': {
             'actionGroup': 'PowerPointGenerator',
-            'apiPath': '/generate',
-            'httpMethod': 'POST',
-            'httpStatusCode': status_code,
-            'responseBody': {
-                'application/json': {
-                    'body': body_text
+            'function': 'powerpointgenerator',  # Must match function name in action group
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {
+                        'body': body_text
+                    }
                 }
             }
         }

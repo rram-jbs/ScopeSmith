@@ -148,12 +148,12 @@ def format_agent_response(status_code, body):
         'messageVersion': '1.0',
         'response': {
             'actionGroup': 'SOWGenerator',
-            'apiPath': '/generate',
-            'httpMethod': 'POST',
-            'httpStatusCode': status_code,
-            'responseBody': {
-                'application/json': {
-                    'body': body_text
+            'function': 'sowgenerator',  # Must match function name in action group
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {
+                        'body': body_text
+                    }
                 }
             }
         }

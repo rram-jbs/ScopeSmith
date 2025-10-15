@@ -191,12 +191,12 @@ def format_agent_response(status_code, body):
         'messageVersion': '1.0',
         'response': {
             'actionGroup': 'CostCalculator',
-            'apiPath': '/calculate',
-            'httpMethod': 'POST',
-            'httpStatusCode': status_code,
-            'responseBody': {
-                'application/json': {
-                    'body': body_text
+            'function': 'costcalculator',  # Must match function name in action group
+            'functionResponse': {
+                'responseBody': {
+                    'TEXT': {
+                        'body': body_text
+                    }
                 }
             }
         }

@@ -49,6 +49,8 @@ def get_session_status(session_id):
         'team_size': int(item['team_size']['N']),
         'requirements_data': json.loads(item.get('requirements_data', {}).get('S', '{}')),
         'cost_data': json.loads(item.get('cost_data', {}).get('S', '{}')),
+        'agent_events': item.get('agent_events', {}).get('S', '[]'),  # Add agent events
+        'current_stage': item.get('current_stage', {}).get('S', ''),
         'template_paths': [p['S'] for p in item.get('template_paths', {}).get('L', [])],
         'document_urls': [url['S'] for url in item.get('document_urls', {}).get('L', [])],
         'error_message': item.get('error_message', {}).get('S', None),
@@ -57,7 +59,7 @@ def get_session_status(session_id):
     }
 
 def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
-    """Invoke Bedrock Agent for autonomous proposal generation"""
+    """Invoke Bedrock Agent and return streaming events"""
     print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
     
     agent_id = os.environ.get('BEDROCK_AGENT_ID')
@@ -73,6 +75,7 @@ def invoke_bedrock_agent(session_id, client_name, project_name, industry, requir
     print(f"[BEDROCK AGENT] Agent Alias ID: {agent_alias_id}")
     
     bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
+    dynamodb = boto3.client('dynamodb')
     
     # Create input text for agent with clear instructions
     input_text = f"""I need you to generate a complete project proposal for the following client:
@@ -107,17 +110,16 @@ Work autonomously through all steps and provide me with the final document URLs.
             agentAliasId=agent_alias_id,
             sessionId=session_id,
             inputText=input_text,
-            enableTrace=True  # Enable traces for debugging
+            enableTrace=True
         )
         
         print(f"[BEDROCK AGENT] ✓ Agent invoked successfully")
-        print(f"[BEDROCK AGENT] Response keys: {list(response.keys())}")
         
     except Exception as e:
         print(f"[BEDROCK AGENT] ✗ Failed to invoke agent: {str(e)}")
         raise e
     
-    # Process the EventStream
+    # Process the EventStream and store events in DynamoDB for frontend polling
     event_stream = response.get('completion')
     if not event_stream:
         print(f"[BEDROCK AGENT] ✗ No completion event stream in response")
@@ -127,6 +129,7 @@ Work autonomously through all steps and provide me with the final document URLs.
     tool_calls = []
     action_group_invocations = 0
     chunks_received = 0
+    agent_events = []
     
     print(f"[BEDROCK AGENT] Processing EventStream...")
     
@@ -140,6 +143,13 @@ Work autonomously through all steps and provide me with the final document URLs.
                     chunks_received += 1
                     print(f"[CHUNK #{chunks_received}] {chunk_text[:200]}{'...' if len(chunk_text) > 200 else ''}")
                     full_response += chunk_text
+                    
+                    # Store chunk event
+                    agent_events.append({
+                        'type': 'chunk',
+                        'timestamp': datetime.utcnow().isoformat(),
+                        'content': chunk_text
+                    })
             
             # Handle trace events (action group invocations, observations, etc.)
             elif 'trace' in event:
@@ -161,13 +171,29 @@ Work autonomously through all steps and provide me with the final document URLs.
                         
                         print(f"[TOOL CALL #{action_group_invocations}] Action Group: {action_group_name}")
                         print(f"[TOOL CALL #{action_group_invocations}] Function: {function_name}")
-                        print(f"[TOOL CALL #{action_group_invocations}] Parameters: {json.dumps(parameters, indent=2)}")
                         
-                        tool_calls.append({
+                        tool_call_event = {
+                            'type': 'tool_call',
+                            'timestamp': datetime.utcnow().isoformat(),
                             'action_group': action_group_name,
                             'function': function_name,
                             'parameters': parameters
-                        })
+                        }
+                        
+                        agent_events.append(tool_call_event)
+                        tool_calls.append(tool_call_event)
+                        
+                        # Update DynamoDB with current progress
+                        dynamodb.update_item(
+                            TableName=os.environ['SESSIONS_TABLE_NAME'],
+                            Key={'session_id': {'S': session_id}},
+                            UpdateExpression='SET agent_events = :events, current_stage = :stage, updated_at = :ua',
+                            ExpressionAttributeValues={
+                                ':events': {'S': json.dumps(agent_events)},
+                                ':stage': {'S': action_group_name},
+                                ':ua': {'S': datetime.utcnow().isoformat()}
+                            }
+                        )
                     
                     # Agent received response from action group
                     if 'observation' in orch_trace:
@@ -177,38 +203,45 @@ Work autonomously through all steps and provide me with the final document URLs.
                             output = observation['actionGroupInvocationOutput']
                             response_text = output.get('text', '')
                             print(f"[TOOL RESPONSE] {response_text[:300]}{'...' if len(response_text) > 300 else ''}")
+                            
+                            agent_events.append({
+                                'type': 'tool_response',
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'content': response_text
+                            })
                         
                         if 'finalResponse' in observation:
                             final_resp = observation['finalResponse']
                             print(f"[FINAL RESPONSE] {json.dumps(final_resp, indent=2)}")
+                            
+                            agent_events.append({
+                                'type': 'final_response',
+                                'timestamp': datetime.utcnow().isoformat(),
+                                'content': json.dumps(final_resp)
+                            })
                     
                     # Agent rationale/reasoning
                     if 'rationale' in orch_trace:
                         rationale = orch_trace['rationale']
-                        print(f"[AGENT REASONING] {rationale.get('text', '')}")
-                
-                # Log model invocation traces
-                if 'modelInvocationInput' in trace_obj:
-                    model_input = trace_obj['modelInvocationInput']
-                    print(f"[MODEL INPUT] {model_input.get('text', '')[:200]}...")
-                
-                if 'modelInvocationOutput' in trace_obj:
-                    model_output = trace_obj['modelInvocationOutput']
-                    print(f"[MODEL OUTPUT] Parsed response received")
-            
-            # Handle return control events (agent needs user input)
-            elif 'returnControl' in event:
-                return_control = event['returnControl']
-                print(f"[RETURN CONTROL] Agent requires user input")
-                print(f"[RETURN CONTROL] {json.dumps(return_control, indent=2)}")
-                
-                return {
-                    'status': 'awaiting_input',
-                    'event': return_control,
-                    'session_id': session_id,
-                    'partial_response': full_response,
-                    'tool_calls': tool_calls
-                }
+                        reasoning_text = rationale.get('text', '')
+                        print(f"[AGENT REASONING] {reasoning_text}")
+                        
+                        agent_events.append({
+                            'type': 'reasoning',
+                            'timestamp': datetime.utcnow().isoformat(),
+                            'content': reasoning_text
+                        })
+                        
+                        # Update DynamoDB with reasoning
+                        dynamodb.update_item(
+                            TableName=os.environ['SESSIONS_TABLE_NAME'],
+                            Key={'session_id': {'S': session_id}},
+                            UpdateExpression='SET agent_events = :events, updated_at = :ua',
+                            ExpressionAttributeValues={
+                                ':events': {'S': json.dumps(agent_events)},
+                                ':ua': {'S': datetime.utcnow().isoformat()}
+                            }
+                        )
             
             # Handle errors in the stream
             elif 'internalServerException' in event:
@@ -231,13 +264,6 @@ Work autonomously through all steps and provide me with the final document URLs.
         raise stream_error
     
     print(f"[BEDROCK AGENT] ✓ EventStream processing complete")
-    print(f"[BEDROCK AGENT] Chunks received: {chunks_received}")
-    print(f"[BEDROCK AGENT] Full response length: {len(full_response)} characters")
-    print(f"[BEDROCK AGENT] Total tool calls: {action_group_invocations}")
-    
-    # Validate that we received meaningful output
-    if chunks_received == 0 and action_group_invocations == 0:
-        print(f"[BEDROCK AGENT] ⚠ Warning: No chunks or tool calls received from agent")
     
     return {
         'status': 'completed',
@@ -245,7 +271,8 @@ Work autonomously through all steps and provide me with the final document URLs.
         'tool_calls': tool_calls,
         'action_group_invocations': action_group_invocations,
         'chunks_received': chunks_received,
-        'session_id': session_id
+        'session_id': session_id,
+        'agent_events': agent_events
     }
 
 def create_cors_response(status_code, body):

@@ -67,6 +67,18 @@ class LambdaStack(Stack):
             ]
         ))
 
+        # Grant Bedrock permissions for inference profiles
+        self.requirements_analyzer.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+            ],
+            resources=[
+                f"arn:aws:bedrock:{self.region}:{self.account}:inference-profile/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+                f"arn:aws:bedrock:*::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0"
+            ]
+        ))
+
         # Cost Calculator Lambda
         self.cost_calculator = lambda_.Function(
             self, "CostCalculator",
@@ -77,10 +89,22 @@ class LambdaStack(Stack):
             timeout=Duration.seconds(30),
             environment={
                 **common_environment,
-                "RATE_SHEETS_TABLE_NAME": infra_stack.rate_sheets_table.table_name
+                "RATE_SHEETS_TABLE_NAME": infra_stack.rate_sheets_table.table_name,
+                "BEDROCK_MODEL_ID": "us.anthropic.claude-3-5-sonnet-20241022-v2:0"
             },
             tracing=lambda_.Tracing.ACTIVE
         )
+        
+        # Grant Bedrock permissions to Cost Calculator (may use Claude for analysis)
+        self.cost_calculator.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+            ],
+            resources=[
+                f"arn:aws:bedrock:{self.region}::foundation-model/anthropic.claude-3*"
+            ]
+        ))
 
         # Template Retriever Lambda
         self.template_retriever = lambda_.Function(
@@ -92,7 +116,8 @@ class LambdaStack(Stack):
             timeout=Duration.seconds(30),
             environment={
                 **common_environment,
-                "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name
+                "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
+                "TEMPLATE_BUCKET_NAME": infra_stack.templates_bucket.bucket_name
             },
             tracing=lambda_.Tracing.ACTIVE
         )
