@@ -120,7 +120,23 @@ Requirements to analyze:
         )
         
         result = json.loads(response['body'].read().decode())
-        analysis_content = result.get('content', [{}])[0].get('text', '{}')
+        print(f"[REQUIREMENTS ANALYZER] Full model response: {json.dumps(result)}")
+        
+        # Parse the response - handle different response structures
+        analysis_content = None
+        if 'content' in result and len(result['content']) > 0:
+            analysis_content = result['content'][0].get('text', '')
+        elif 'output' in result:
+            # Handle alternative response structure
+            if isinstance(result['output'], dict) and 'message' in result['output']:
+                message = result['output']['message']
+                if 'content' in message and len(message['content']) > 0:
+                    analysis_content = message['content'][0].get('text', '')
+        
+        if not analysis_content:
+            print(f"[REQUIREMENTS ANALYZER] WARNING: Could not extract text from model response")
+            print(f"[REQUIREMENTS ANALYZER] Response keys: {list(result.keys())}")
+            raise ValueError("Model returned empty or invalid response")
         
         print(f"[REQUIREMENTS ANALYZER] Model response length: {len(analysis_content)} chars")
         print(f"[REQUIREMENTS ANALYZER] Model response preview: {analysis_content[:500]}...")
@@ -134,7 +150,12 @@ Requirements to analyze:
                 analysis_content = analysis_content.split('```')[1].split('```')[0].strip()
             
             analysis_result = json.loads(analysis_content)
-            print(f"[REQUIREMENTS ANALYZER] Successfully parsed analysis result")
+            
+            # Validate the analysis result has the expected fields
+            if not analysis_result or len(analysis_result) == 0:
+                raise ValueError("Empty analysis result")
+            
+            print(f"[REQUIREMENTS ANALYZER] Successfully parsed analysis result with {len(analysis_result)} fields")
             
         except json.JSONDecodeError as je:
             print(f"[REQUIREMENTS ANALYZER] Failed to parse JSON: {str(je)}")
