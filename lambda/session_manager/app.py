@@ -251,7 +251,7 @@ Work autonomously through all steps and provide me with the final document URLs.
                         
                         if 'finalResponse' in observation:
                             final_resp = observation['finalResponse']
-                            print(f"[FINAL RESPONSE] {json.dumps(final_resp, indent=2)}")
+                            print(f"[FINAL RESPONSE] {json.dumps(final_resp, indent=2, cls=DateTimeEncoder)}")
                             
                             agent_events.append({
                                 'type': 'final_response',

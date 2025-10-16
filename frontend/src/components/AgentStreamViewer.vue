@@ -411,6 +411,11 @@ const fetchAgentStatus = async () => {
   try {
     const data = await get(`/api/agent-status/${props.sessionId}`)
     
+    // Debug logging
+    console.log('[AgentStreamViewer] Fetched status:', data.status)
+    console.log('[AgentStreamViewer] Raw agent_events:', data.agent_events)
+    console.log('[AgentStreamViewer] Agent events type:', typeof data.agent_events)
+    
     // Update status - sync with backend status values from session_manager/app.py
     status.value = data.status || 'AGENT_PROCESSING'
     
@@ -430,31 +435,49 @@ const fetchAgentStatus = async () => {
           ? JSON.parse(data.agent_events) 
           : data.agent_events
         
-        // Only update if we have new events
-        if (Array.isArray(parsedEvents) && parsedEvents.length > events.value.length) {
-          events.value = parsedEvents
-          updateWorkflowProgress()
-          scrollToBottom()
+        console.log('[AgentStreamViewer] Parsed events:', parsedEvents)
+        console.log('[AgentStreamViewer] Parsed events length:', parsedEvents?.length)
+        console.log('[AgentStreamViewer] Current events length:', events.value.length)
+        
+        // Always update events if we have any, even if the length hasn't changed
+        // This ensures we show events on initial load
+        if (Array.isArray(parsedEvents)) {
+          if (parsedEvents.length > 0) {
+            // Only update if we have new events OR if we had no events before
+            if (parsedEvents.length !== events.value.length || events.value.length === 0) {
+              console.log('[AgentStreamViewer] ✓ Updating events display')
+              events.value = parsedEvents
+              updateWorkflowProgress()
+              scrollToBottom()
+            }
+          }
+        } else {
+          console.warn('[AgentStreamViewer] ⚠ Parsed events is not an array:', parsedEvents)
         }
       } catch (e) {
-        console.error('Error parsing agent events:', e)
-        // Fallback: if parsing fails, keep existing events
+        console.error('[AgentStreamViewer] ✗ Error parsing agent events:', e)
+        console.error('[AgentStreamViewer] Raw agent_events value:', data.agent_events)
+        // Don't fallback to empty array - keep existing events
       }
+    } else {
+      console.log('[AgentStreamViewer] No agent_events in response')
     }
     
     // Check for completion or error states
     if (status.value === 'COMPLETED') {
+      console.log('[AgentStreamViewer] ✓ Session completed')
       clearInterval(pollInterval)
       updateWorkflowProgress() // Final update
       emit('complete', data)
     } else if (status.value === 'ERROR' || status.value === 'CONFIGURATION_ERROR') {
+      console.error('[AgentStreamViewer] ✗ Session error:', data.error_message)
       clearInterval(pollInterval)
       error.value = data.error_message || 'An error occurred during agent execution'
       emit('error', error.value)
     }
     
   } catch (err) {
-    console.error('Error fetching agent status:', err)
+    console.error('[AgentStreamViewer] ✗ Error fetching agent status:', err)
     // Don't stop polling on network errors - agent might still be working
     // Only stop if we get a 404 (session not found)
     if (err.response?.status === 404) {
