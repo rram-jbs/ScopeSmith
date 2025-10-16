@@ -6,9 +6,6 @@ from aws_cdk import (
     CfnOutput,
     aws_lambda as lambda_,
     aws_iam as iam,
-    aws_cloudwatch as cloudwatch,
-    aws_cloudwatch_actions as cloudwatch_actions,
-    aws_sns as sns,
 )
 from constructs import Construct
 from .infrastructure_stack import InfrastructureStack
@@ -22,21 +19,6 @@ class LambdaStack(Stack):
             "AWS_LAMBDA_FUNCTION_TIMEOUT": "60",
             "SESSIONS_TABLE_NAME": infra_stack.sessions_table.table_name,
         }
-
-        # Create alarm topic for Lambda errors
-        alarm_topic = sns.Topic(self, "LambdaErrorAlarmTopic")
-
-        # Helper method to create CloudWatch alarm
-        def create_error_alarm(function: lambda_.Function, function_name: str):
-            alarm = cloudwatch.Alarm(
-                self, f"{function_name}ErrorAlarm",
-                metric=function.metric_errors(
-                    period=Duration.minutes(5)
-                ),
-                threshold=3,
-                evaluation_periods=1
-            )
-            alarm.add_alarm_action(cloudwatch_actions.SnsAction(alarm_topic))
 
         # Requirements Analyzer Lambda
         self.requirements_analyzer = lambda_.Function(
@@ -221,7 +203,7 @@ class LambdaStack(Stack):
                 ],
                 resources=[
                     f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-pro-v1:0",
-                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-*"
+                    f"arn:aws:bedrock::{self.region}::foundation-model/amazon.nova-*"
                 ]
             ))
 
@@ -233,27 +215,6 @@ class LambdaStack(Stack):
                 principal=iam.ServicePrincipal("bedrock.amazonaws.com"),
                 action="lambda:InvokeFunction"
             )
-
-        # Create CloudWatch alarms for all functions AFTER all permissions are set
-        # This prevents circular dependencies between Lambda, Role Policy, and Alarms
-        for func, name in [
-            (self.requirements_analyzer, "RequirementsAnalyzer"),
-            (self.cost_calculator, "CostCalculator"),
-            (self.template_retriever, "TemplateRetriever"),
-            (self.powerpoint_generator, "PowerPointGenerator"),
-            (self.sow_generator, "SOWGenerator"),
-            (self.session_manager, "SessionManager")
-        ]:
-            alarm = cloudwatch.Alarm(
-                self, f"{name}ErrorAlarm",
-                metric=func.metric_errors(
-                    period=Duration.minutes(5)
-                ),
-                threshold=3,
-                evaluation_periods=1
-            )
-            # Add alarm action after alarm creation to avoid circular dependency
-            alarm.add_alarm_action(cloudwatch_actions.SnsAction(alarm_topic))
 
         # CloudFormation outputs
         for func, name in [
