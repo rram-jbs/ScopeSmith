@@ -182,15 +182,31 @@ Include slides for: Executive Summary, Project Scope, Technical Approach, Timeli
                 }
         
         # Download template or create new presentation
-        if template_path:
-            with tempfile.NamedTemporaryFile(suffix='.pptx') as template_file:
-                s3.download_file(
-                    os.environ['TEMPLATES_BUCKET_NAME'],
-                    template_path,
-                    template_file.name
+        prs = None
+        if template_path and not template_path.startswith('path/to/'):
+            # Check if template exists in S3 before downloading
+            try:
+                s3.head_object(
+                    Bucket=os.environ['TEMPLATES_BUCKET_NAME'],
+                    Key=template_path
                 )
-                prs = Presentation(template_file.name)
+                # Template exists, download it
+                with tempfile.NamedTemporaryFile(suffix='.pptx', delete=False) as template_file:
+                    s3.download_file(
+                        os.environ['TEMPLATES_BUCKET_NAME'],
+                        template_path,
+                        template_file.name
+                    )
+                    prs = Presentation(template_file.name)
+                    print(f"[POWERPOINT] Using template: {template_path}")
+            except s3.exceptions.NoSuchKey:
+                print(f"[POWERPOINT] Template not found: {template_path}, creating blank presentation")
+                prs = Presentation()
+            except Exception as e:
+                print(f"[POWERPOINT] Error loading template: {str(e)}, creating blank presentation")
+                prs = Presentation()
         else:
+            print(f"[POWERPOINT] No valid template specified, creating blank presentation")
             prs = Presentation()
         
         # Add slides based on generated content

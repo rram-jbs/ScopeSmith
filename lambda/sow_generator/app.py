@@ -183,15 +183,31 @@ Generate a professional SOW with the following sections. Return as JSON (no mark
                 }
         
         # Download template or create new document
-        if template_path:
-            with tempfile.NamedTemporaryFile(suffix='.docx') as template_file:
-                s3.download_file(
-                    os.environ['TEMPLATES_BUCKET_NAME'],
-                    template_path,
-                    template_file.name
+        doc = None
+        if template_path and not template_path.startswith('path/to/'):
+            # Check if template exists in S3 before downloading
+            try:
+                s3.head_object(
+                    Bucket=os.environ['TEMPLATES_BUCKET_NAME'],
+                    Key=template_path
                 )
-                doc = Document(template_file.name)
+                # Template exists, download it
+                with tempfile.NamedTemporaryFile(suffix='.docx', delete=False) as template_file:
+                    s3.download_file(
+                        os.environ['TEMPLATES_BUCKET_NAME'],
+                        template_path,
+                        template_file.name
+                    )
+                    doc = Document(template_file.name)
+                    print(f"[SOW GENERATOR] Using template: {template_path}")
+            except s3.exceptions.NoSuchKey:
+                print(f"[SOW GENERATOR] Template not found: {template_path}, creating blank document")
+                doc = Document()
+            except Exception as e:
+                print(f"[SOW GENERATOR] Error loading template: {str(e)}, creating blank document")
+                doc = Document()
         else:
+            print(f"[SOW GENERATOR] No valid template specified, creating blank document")
             doc = Document()
         
         # Add SOW content to document

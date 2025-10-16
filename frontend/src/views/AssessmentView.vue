@@ -315,19 +315,39 @@ const submitAssessment = async () => {
 const handleAgentComplete = async (data) => {
   console.log('Agent completed:', data)
   
+  // Validate that documents are actually available before showing success
+  if (!data.document_urls || data.document_urls.length === 0) {
+    console.error('Agent completed but no documents were generated')
+    submitError.value = 'Workflow completed but no documents were generated. Please check the logs and try again.'
+    currentView.value = 'form'
+    return
+  }
+  
   // Fetch document URLs
   try {
     const results = await get(`/api/results/${sessionId.value}`)
+    
+    // Double-check that we have actual document URLs
+    if (!results.powerpoint_url && !results.sow_url) {
+      console.error('No document URLs available in results')
+      submitError.value = 'Documents were not generated successfully. Please try again.'
+      currentView.value = 'form'
+      return
+    }
+    
     documents.value = {
       powerpoint_url: results.powerpoint_url,
       sow_url: results.sow_url,
       cost_data: results.cost_data || {}
     }
+    
+    console.log('Documents retrieved successfully:', documents.value)
+    currentView.value = 'results'
   } catch (error) {
     console.error('Error fetching documents:', error)
+    submitError.value = 'Failed to retrieve generated documents. Please try again.'
+    currentView.value = 'form'
   }
-  
-  currentView.value = 'results'
 }
 
 const handleAgentError = (error) => {
