@@ -84,12 +84,27 @@ def handler(event, context):
             parameters = event.get('parameters', [])
             param_dict = {}
             for param in parameters:
-                param_dict[param['name']] = param['value']
+                param_name = param['name']
+                param_value = param['value']
+                
+                # Handle nested JSON in parameters
+                if param_name == 'requirements_data':
+                    try:
+                        # Try to parse as JSON if it's a string
+                        if isinstance(param_value, str):
+                            param_dict[param_name] = json.loads(param_value)
+                        else:
+                            param_dict[param_name] = param_value
+                    except json.JSONDecodeError as e:
+                        print(f"[COST CALCULATOR] JSON decode error for requirements_data: {str(e)}")
+                        print(f"[COST CALCULATOR] Raw value: {param_value[:500]}...")
+                        # If it fails, store as-is and handle later
+                        param_dict[param_name] = param_value
+                else:
+                    param_dict[param_name] = param_value
             
             session_id = param_dict.get('session_id')
             requirements_data = param_dict.get('requirements_data')
-            if isinstance(requirements_data, str):
-                requirements_data = json.loads(requirements_data)
         elif 'inputText' in event:
             try:
                 params = json.loads(event['inputText'])
@@ -110,6 +125,7 @@ def handler(event, context):
         print(f"[COST CALCULATOR] Starting cost calculation for session: {session_id}")
         
         # Initialize AWS clients
+        bedrock = boto3.client('bedrock-runtime')
         dynamodb = boto3.client('dynamodb')
         
         # Update status to calculating costs
@@ -137,26 +153,39 @@ def handler(event, context):
         requirements_data_str = session_data.get('requirements_data', {}).get('S', '{}')
         
         try:
-            requirements_data = json.loads(requirements_data_str)
+            requirements_data_full = json.loads(requirements_data_str)
+            # Extract the analysis for cost calculation
+            analysis_data = requirements_data_full.get('analysis', {})
+            raw_requirements = requirements_data_full.get('raw_requirements', '')
         except json.JSONDecodeError:
-            raise ValueError("Invalid requirements data format")
+            raise ValueError("Invalid requirements data format in session")
         
-        # Calculate project cost
-        cost_result = calculate_project_cost(requirements_data)
+        # Calculate project cost based on analysis
+        cost_result = calculate_project_cost(analysis_data)
         
-        # Call Amazon Nova Pro to estimate additional costs or validate calculations
-        prompt = f"""Analyze this project data and provide a cost breakdown validation.
-        
-Project Requirements:
-{json.dumps(requirements_data, indent=2)}
+        # Call Amazon Nova Pro to estimate additional costs and validate calculations
+        # Include BOTH raw requirements and analysis for full context
+        prompt = f"""Analyze this project data and provide a cost breakdown validation and recommendations.
 
-Review the estimated costs and provide recommendations for:
-1. Resource allocation optimization
-2. Risk contingency percentage
-3. Hidden costs to consider
-4. Cost-saving opportunities
+RAW PROJECT REQUIREMENTS (Original User Input):
+{raw_requirements}
 
-Return your analysis as a JSON object."""
+ANALYZED PROJECT DATA:
+{json.dumps(analysis_data, indent=2)}
+
+CALCULATED COST ESTIMATES:
+{json.dumps(cost_result, indent=2)}
+
+Based on the complete project context, provide recommendations in JSON format with the following structure (no markdown, no code blocks):
+{{
+    "resource_allocation_recommendations": ["List of recommendations"],
+    "risk_contingency_percentage": "Recommended percentage as number (e.g., 15)",
+    "hidden_costs_to_consider": ["List of potential hidden costs"],
+    "cost_saving_opportunities": ["List of opportunities"],
+    "overall_assessment": "Brief assessment of the cost estimate accuracy"
+}}"""
+        
+        print(f"[COST CALCULATOR] Calling Bedrock model for cost validation...")
         
         response = bedrock.invoke_model(
             modelId=os.environ['BEDROCK_MODEL_ID'],
@@ -176,7 +205,43 @@ Return your analysis as a JSON object."""
         )
         
         result = json.loads(response['body'].read().decode())
-        ai_insights = result.get('content', [{}])[0].get('text', '{}')
+        print(f"[COST CALCULATOR] Bedrock response received")
+        
+        # Parse the response - handle different response structures
+        ai_insights_content = None
+        if 'content' in result and len(result['content']) > 0:
+            ai_insights_content = result['content'][0].get('text', '')
+        elif 'output' in result:
+            if isinstance(result['output'], dict) and 'message' in result['output']:
+                message = result['output']['message']
+                if 'content' in message and len(message['content']) > 0:
+                    ai_insights_content = message['content'][0].get('text', '')
+        
+        if not ai_insights_content:
+            print(f"[COST CALCULATOR] WARNING: Could not extract text from model response")
+            ai_insights_content = '{"overall_assessment": "Cost calculation completed successfully"}'
+        
+        # Try to parse AI insights as JSON
+        try:
+            # Remove markdown code blocks if present
+            if '```json' in ai_insights_content:
+                ai_insights_content = ai_insights_content.split('```json')[1].split('```')[0].strip()
+            elif '```' in ai_insights_content:
+                ai_insights_content = ai_insights_content.split('```')[1].split('```')[0].strip()
+            
+            ai_insights = json.loads(ai_insights_content)
+        except json.JSONDecodeError:
+            print(f"[COST CALCULATOR] Could not parse AI insights as JSON, using default")
+            ai_insights = {
+                "overall_assessment": "Cost calculation completed based on project analysis",
+                "risk_contingency_percentage": "15",
+                "resource_allocation_recommendations": ["Review resource allocation with project requirements"],
+                "hidden_costs_to_consider": ["Infrastructure costs", "Training costs", "Maintenance"],
+                "cost_saving_opportunities": ["Optimize resource utilization"]
+            }
+        
+        # Combine cost result with AI insights
+        cost_result['ai_insights'] = ai_insights
         
         # Update DynamoDB with cost calculation results
         dynamodb.update_item(
@@ -191,29 +256,33 @@ Return your analysis as a JSON object."""
             }
         )
         
+        print(f"[COST CALCULATOR] Cost calculation complete")
+        
         # Return response in AgentCore format
         return format_agent_response(200, {
             'session_id': session_id,
             'message': 'Cost calculation completed successfully',
-            'cost_result': cost_result,
-            'ai_insights': ai_insights
+            'cost_result': cost_result
         })
         
     except Exception as e:
         print(f"[COST CALCULATOR] ERROR: {str(e)}")
+        import traceback
+        print(f"[COST CALCULATOR] Traceback: {traceback.format_exc()}")
         try:
-            dynamodb = boto3.client('dynamodb')
-            dynamodb.update_item(
-                TableName=os.environ['SESSIONS_TABLE_NAME'],
-                Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={
-                    ':status': {'S': 'ERROR'},
-                    ':error': {'S': f'Cost calculation failed: {str(e)}'},
-                    ':ua': {'S': datetime.utcnow().isoformat()}
-                }
-            )
+            if 'session_id' in locals():
+                dynamodb = boto3.client('dynamodb')
+                dynamodb.update_item(
+                    TableName=os.environ['SESSIONS_TABLE_NAME'],
+                    Key={'session_id': {'S': session_id}},
+                    UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': {'S': 'ERROR'},
+                        ':error': {'S': f'Cost calculation failed: {str(e)}'},
+                        ':ua': {'S': datetime.utcnow().isoformat()}
+                    }
+                )
         except:
             pass
             

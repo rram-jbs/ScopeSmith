@@ -22,11 +22,9 @@ export function usePolling(sessionId) {
       clearTimeout(pollInterval.value)
     }
 
-    // Implement exponential backoff with a maximum interval
-    const maxInterval = Math.min(POLLING_INTERVAL * 8, 10000) // Cap at 10 seconds
-    currentInterval.value = Math.min(currentInterval.value * 1.5, maxInterval)
-
-    pollInterval.value = setTimeout(fetchStatus, currentInterval.value)
+    // Keep polling at consistent 2-second intervals during active processing
+    // No exponential backoff needed since backend handles this efficiently
+    pollInterval.value = setTimeout(fetchStatus, POLLING_INTERVAL)
   }
 
   const fetchStatus = async () => {
@@ -42,18 +40,17 @@ export function usePolling(sessionId) {
       status.value = response
       updateElapsedTime()
 
-      // Check if process is complete or has error
-      if (response.status === 'completed' || response.status === 'error') {
+      // Check if process is complete or has error - sync with backend status values
+      if (response.status === 'COMPLETED' || response.status === 'ERROR') {
         isComplete.value = true
         clearTimeout(pollInterval.value)
       } else {
-        // Schedule next poll with backoff
+        // Continue polling for PENDING or PROCESSING states
         scheduleNextPoll()
       }
     } catch (err) {
       error.value = err
-      // On error, wait a bit longer before retrying
-      currentInterval.value = Math.min(currentInterval.value * 2, 15000) // Cap at 15 seconds on error
+      // On error, continue polling - agent might still be working
       scheduleNextPoll()
     }
   }

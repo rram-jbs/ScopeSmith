@@ -120,7 +120,8 @@ class LambdaStack(Stack):
             environment={
                 **common_environment,
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
-                "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name
+                "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name,
+                "BEDROCK_MODEL_ID": "amazon.nova-pro-v1:0"  # For AI content generation
             },
             tracing=lambda_.Tracing.ACTIVE
         )
@@ -136,7 +137,8 @@ class LambdaStack(Stack):
             environment={
                 **common_environment,
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
-                "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name
+                "ARTIFACTS_BUCKET_NAME": infra_stack.artifacts_bucket.bucket_name,
+                "BEDROCK_MODEL_ID": "amazon.nova-pro-v1:0"  # For AI content generation
             },
             tracing=lambda_.Tracing.ACTIVE
         )
@@ -148,7 +150,7 @@ class LambdaStack(Stack):
             code=lambda_.Code.from_asset("../lambda/session_manager"),
             handler="app.handler",
             memory_size=256,
-            timeout=Duration.seconds(30),
+            timeout=Duration.seconds(900),  # 15 minutes for async agent workflow processing
             environment={
                 **common_environment,
                 "TEMPLATES_BUCKET_NAME": infra_stack.templates_bucket.bucket_name,
@@ -175,6 +177,15 @@ class LambdaStack(Stack):
             infra_stack.templates_bucket.grant_read(func)
             infra_stack.artifacts_bucket.grant_read_write(func)
 
+        # Grant session manager permission to invoke itself asynchronously
+        self.session_manager.add_to_role_policy(iam.PolicyStatement(
+            actions=[
+                "lambda:InvokeFunction",
+                "lambda:InvokeAsync"
+            ],
+            resources=[self.session_manager.function_arn]
+        ))
+
         # Grant session manager AgentCore Runtime permissions
         self.session_manager.add_to_role_policy(iam.PolicyStatement(
             actions=[
@@ -200,6 +211,19 @@ class LambdaStack(Stack):
                 f"arn:aws:bedrock:{self.region}:{self.account}:agent-alias/*/*"
             ]
         ))
+        
+        # Grant Bedrock permissions to PowerPoint and SOW generators for content generation
+        for func in [self.powerpoint_generator, self.sow_generator]:
+            func.add_to_role_policy(iam.PolicyStatement(
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream"
+                ],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-pro-v1:0",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.nova-*"
+                ]
+            ))
 
         # Grant Bedrock service permission to invoke all Lambda functions (for AgentCore Gateway)
         for func in [self.requirements_analyzer, self.cost_calculator, self.template_retriever, 

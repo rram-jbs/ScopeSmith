@@ -14,6 +14,7 @@ class DateTimeEncoder(json.JSONEncoder):
         return super(DateTimeEncoder, self).default(obj)
 
 def create_session(client_name, project_name, industry, requirements, duration, team_size):
+    """Create a new session record in DynamoDB with PENDING status"""
     session_id = str(uuid.uuid4())
     timestamp = datetime.utcnow().isoformat()
     
@@ -22,7 +23,7 @@ def create_session(client_name, project_name, industry, requirements, duration, 
         TableName=os.environ['SESSIONS_TABLE_NAME'],
         Item={
             'session_id': {'S': session_id},
-            'status': {'S': 'INITIATED'},
+            'status': {'S': 'PENDING'},  # Initial status
             'client_name': {'S': client_name},
             'project_name': {'S': project_name},
             'industry': {'S': industry},
@@ -31,44 +32,105 @@ def create_session(client_name, project_name, industry, requirements, duration, 
             'requirements_data': {'S': json.dumps({
                 'raw_requirements': requirements
             })},
+            'current_stage': {'S': 'Initializing'},
+            'progress': {'N': '0'},
             'created_at': {'S': timestamp},
             'updated_at': {'S': timestamp}
         }
     )
+    
+    print(f"[SESSION] Created session {session_id} with PENDING status")
     return session_id
 
-def get_session_status(session_id):
-    dynamodb = boto3.client('dynamodb')
-    response = dynamodb.get_item(
-        TableName=os.environ['SESSIONS_TABLE_NAME'],
-        Key={'session_id': {'S': session_id}}
-    )
-    
-    if 'Item' not in response:
-        return None
+def invoke_agent_async(session_id, client_name, project_name, industry, requirements, duration, team_size):
+    """
+    Invoke the Bedrock Agent processing asynchronously using Lambda self-invocation.
+    This allows the API to return immediately while processing continues in the background.
+    """
+    try:
+        lambda_client = boto3.client('lambda')
         
-    item = response['Item']
-    return {
-        'session_id': item['session_id']['S'],
-        'status': item['status']['S'],
-        'client_name': item['client_name']['S'],
-        'project_name': item['project_name']['S'],
-        'industry': item['industry']['S'],
-        'duration': item['duration']['S'],
-        'team_size': int(item['team_size']['N']),
-        'requirements_data': json.loads(item.get('requirements_data', {}).get('S', '{}')),
-        'cost_data': json.loads(item.get('cost_data', {}).get('S', '{}')),
-        'agent_events': item.get('agent_events', {}).get('S', '[]'),  # Add agent events
-        'current_stage': item.get('current_stage', {}).get('S', ''),
-        'template_paths': [p['S'] for p in item.get('template_paths', {}).get('L', [])],
-        'document_urls': [url['S'] for url in item.get('document_urls', {}).get('L', [])],
-        'error_message': item.get('error_message', {}).get('S', None),
-        'created_at': item['created_at']['S'],
-        'updated_at': item['updated_at']['S']
+        # Prepare payload for async invocation
+        payload = {
+            'action': 'PROCESS_AGENT_WORKFLOW',
+            'session_id': session_id,
+            'client_name': client_name,
+            'project_name': project_name,
+            'industry': industry,
+            'requirements': requirements,
+            'duration': duration,
+            'team_size': team_size
+        }
+        
+        # Invoke this Lambda function asynchronously to process the agent workflow
+        function_name = os.environ.get('AWS_LAMBDA_FUNCTION_NAME')
+        
+        print(f"[SESSION] Invoking async workflow for session {session_id}")
+        
+        lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType='Event',  # Asynchronous invocation
+            Payload=json.dumps(payload)
+        )
+        
+        print(f"[SESSION] Async invocation submitted successfully")
+        return True
+        
+    except Exception as e:
+        print(f"[SESSION] ERROR: Failed to invoke async workflow: {str(e)}")
+        
+        # Update session with error
+        dynamodb = boto3.client('dynamodb')
+        dynamodb.update_item(
+            TableName=os.environ['SESSIONS_TABLE_NAME'],
+            Key={'session_id': {'S': session_id}},
+            UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':status': {'S': 'ERROR'},
+                ':error': {'S': f'Failed to start async workflow: {str(e)}'},
+                ':ua': {'S': datetime.utcnow().isoformat()}
+            }
+        )
+        
+        raise e
+
+def update_session_status(session_id, status, stage=None, progress=None, error_message=None):
+    """Helper function to update session status in DynamoDB"""
+    dynamodb = boto3.client('dynamodb')
+    
+    update_expression_parts = ['#status = :status', 'updated_at = :ua']
+    expression_attribute_names = {'#status': 'status'}
+    expression_attribute_values = {
+        ':status': {'S': status},
+        ':ua': {'S': datetime.utcnow().isoformat()}
     }
+    
+    if stage:
+        update_expression_parts.append('current_stage = :stage')
+        expression_attribute_values[':stage'] = {'S': stage}
+    
+    if progress is not None:
+        update_expression_parts.append('progress = :progress')
+        expression_attribute_values[':progress'] = {'N': str(progress)}
+    
+    if error_message:
+        update_expression_parts.append('error_message = :error')
+        expression_attribute_values[':error'] = {'S': error_message}
+    
+    dynamodb.update_item(
+        TableName=os.environ['SESSIONS_TABLE_NAME'],
+        Key={'session_id': {'S': session_id}},
+        UpdateExpression='SET ' + ', '.join(update_expression_parts),
+        ExpressionAttributeNames=expression_attribute_names,
+        ExpressionAttributeValues=expression_attribute_values
+    )
 
 def invoke_bedrock_agent(session_id, client_name, project_name, industry, requirements, duration, team_size):
-    """Invoke Bedrock Agent with retry logic for throttling"""
+    """
+    Invoke Bedrock Agent with retry logic and proper status tracking.
+    This runs asynchronously after the API has already returned a session ID.
+    """
     print(f"[BEDROCK AGENT] Starting invocation for session: {session_id}")
     
     agent_id = os.environ.get('BEDROCK_AGENT_ID')
@@ -82,6 +144,9 @@ def invoke_bedrock_agent(session_id, client_name, project_name, industry, requir
     
     print(f"[BEDROCK AGENT] Agent ID: {agent_id}")
     print(f"[BEDROCK AGENT] Agent Alias ID: {agent_alias_id}")
+    
+    # Update status to PROCESSING
+    update_session_status(session_id, 'PROCESSING', stage='Starting agent workflow', progress=5)
     
     bedrock_agent_runtime = boto3.client('bedrock-agent-runtime')
     dynamodb = boto3.client('dynamodb')
@@ -128,6 +193,7 @@ Work autonomously through all steps and provide me with the final document URLs.
             )
             
             print(f"[BEDROCK AGENT] ✓ Agent invoked successfully")
+            update_session_status(session_id, 'PROCESSING', stage='Agent workflow started', progress=10)
             break  # Success, exit retry loop
             
         except ClientError as e:
@@ -136,6 +202,7 @@ Work autonomously through all steps and provide me with the final document URLs.
             if error_code == 'ThrottlingException' and attempt < max_retries - 1:
                 wait_time = retry_delay * (2 ** attempt)  # Exponential backoff
                 print(f"[BEDROCK AGENT] ⚠ Throttled, waiting {wait_time}s before retry...")
+                update_session_status(session_id, 'PROCESSING', stage=f'Retrying (throttled, attempt {attempt + 2})')
                 time.sleep(wait_time)
                 continue
             else:
@@ -155,6 +222,15 @@ Work autonomously through all steps and provide me with the final document URLs.
     agent_events = []
     last_update_time = time.time()
     update_interval = 1.0  # Update DynamoDB at most once per second to avoid throttling
+    
+    # Progress tracking based on expected workflow stages
+    stage_progress = {
+        'RequirementsAnalyzer': 30,
+        'CostCalculator': 50,
+        'TemplateRetriever': 60,
+        'PowerPointGenerator': 80,
+        'SOWGenerator': 95
+    }
     
     print(f"[BEDROCK AGENT] Processing EventStream...")
     
@@ -206,6 +282,10 @@ Work autonomously through all steps and provide me with the final document URLs.
                         parameters = invocation_input.get('actionGroupInvocationInput', {}).get('parameters', [])
                         
                         print(f"[TOOL CALL #{action_group_invocations}] Action Group: {action_group_name}")
+                        
+                        # Update progress based on stage
+                        progress = stage_progress.get(action_group_name, 15 + (action_group_invocations * 10))
+                        update_session_status(session_id, 'PROCESSING', stage=f'Running {action_group_name}', progress=progress)
                         
                         tool_call_event = {
                             'type': 'tool_call',
@@ -289,24 +369,23 @@ Work autonomously through all steps and provide me with the final document URLs.
                 error = event['validationException']
                 print(f"[ERROR] Validation error: {error}")
                 raise Exception(f"Bedrock agent validation error: {error}")
-            
-            elif 'throttlingException' in event:
-                error = event['throttlingException']
-                print(f"[ERROR] Throttling error: {error}")
-                raise Exception(f"Bedrock agent throttling error: {error}")
     
     except Exception as stream_error:
         print(f"[BEDROCK AGENT] ✗ Error processing event stream: {str(stream_error)}")
+        
+        update_session_status(
+            session_id, 
+            'ERROR', 
+            stage='Agent workflow failed', 
+            error_message=str(stream_error)
+        )
         
         try:
             dynamodb.update_item(
                 TableName=os.environ['SESSIONS_TABLE_NAME'],
                 Key={'session_id': {'S': session_id}},
-                UpdateExpression='SET #status = :status, error_message = :error, agent_events = :events, updated_at = :ua',
-                ExpressionAttributeNames={'#status': 'status'},
+                UpdateExpression='SET agent_events = :events, updated_at = :ua',
                 ExpressionAttributeValues={
-                    ':status': {'S': 'ERROR'},
-                    ':error': {'S': str(stream_error)},
                     ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
                     ':ua': {'S': datetime.utcnow().isoformat()}
                 }
@@ -316,15 +395,21 @@ Work autonomously through all steps and provide me with the final document URLs.
         
         raise stream_error
     
+    # Final update - workflow completed
     try:
+        update_session_status(session_id, 'COMPLETED', stage='Workflow completed', progress=100)
+        
         dynamodb.update_item(
             TableName=os.environ['SESSIONS_TABLE_NAME'],
             Key={'session_id': {'S': session_id}},
-            UpdateExpression='SET agent_events = :events, #status = :status, updated_at = :ua',
-            ExpressionAttributeNames={'#status': 'status'},
+            UpdateExpression='SET agent_events = :events, agent_response = :ar, updated_at = :ua',
             ExpressionAttributeValues={
                 ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
-                ':status': {'S': 'COMPLETED'},
+                ':ar': {'S': json.dumps({
+                    'response': full_response,
+                    'tool_calls': tool_calls,
+                    'action_group_invocations': action_group_invocations
+                }, cls=DateTimeEncoder)},
                 ':ua': {'S': datetime.utcnow().isoformat()}
             }
         )
@@ -343,6 +428,42 @@ Work autonomously through all steps and provide me with the final document URLs.
         'agent_events': agent_events
     }
 
+def get_session_status(session_id):
+    """Get current session status from DynamoDB"""
+    dynamodb = boto3.client('dynamodb')
+    response = dynamodb.get_item(
+        TableName=os.environ['SESSIONS_TABLE_NAME'],
+        Key={'session_id': {'S': session_id}}
+    )
+    
+    if 'Item' not in response:
+        return None
+        
+    item = response['Item']
+    
+    # Calculate progress percentage if not explicitly set
+    progress = int(item.get('progress', {}).get('N', '0'))
+    
+    return {
+        'session_id': item['session_id']['S'],
+        'status': item['status']['S'],
+        'current_stage': item.get('current_stage', {}).get('S', ''),
+        'progress': progress,
+        'client_name': item['client_name']['S'],
+        'project_name': item['project_name']['S'],
+        'industry': item['industry']['S'],
+        'duration': item['duration']['S'],
+        'team_size': int(item['team_size']['N']),
+        'requirements_data': json.loads(item.get('requirements_data', {}).get('S', '{}')),
+        'cost_data': json.loads(item.get('cost_data', {}).get('S', '{}')),
+        'agent_events': item.get('agent_events', {}).get('S', '[]'),
+        'template_paths': [p['S'] for p in item.get('template_paths', {}).get('L', [])],
+        'document_urls': [url['S'] for url in item.get('document_urls', {}).get('L', [])],
+        'error_message': item.get('error_message', {}).get('S', None),
+        'created_at': item['created_at']['S'],
+        'updated_at': item['updated_at']['S']
+    }
+
 def create_cors_response(status_code, body):
     """Helper function to create response with CORS headers"""
     return {
@@ -357,9 +478,83 @@ def create_cors_response(status_code, body):
     }
 
 def handler(event, context):
+    """
+    Main handler for Session Manager Lambda.
+    
+    Handles two types of invocations:
+    1. API Gateway requests (HTTP events) - Create session and return immediately
+    2. Async self-invocations (direct Lambda events) - Process agent workflow in background
+    """
     try:
-        http_method = event['httpMethod']
-        path = event['path']
+        # Check if this is an async workflow invocation (not from API Gateway)
+        if 'action' in event and event['action'] == 'PROCESS_AGENT_WORKFLOW':
+            print(f"[SESSION] Processing async agent workflow")
+            
+            session_id = event['session_id']
+            
+            try:
+                # Run the agent workflow (this can take 3-5 minutes)
+                agent_response = invoke_bedrock_agent(
+                    session_id,
+                    event['client_name'],
+                    event['project_name'],
+                    event['industry'],
+                    event['requirements'],
+                    event['duration'],
+                    event['team_size']
+                )
+                
+                print(f"[SESSION] ✓ Agent workflow completed for session: {session_id}")
+                print(f"[SESSION] Tool calls made: {agent_response.get('action_group_invocations', 0)}")
+                
+                return {
+                    'statusCode': 200,
+                    'body': json.dumps({
+                        'message': 'Agent workflow completed',
+                        'session_id': session_id
+                    })
+                }
+                
+            except ValueError as ve:
+                print(f"[SESSION] ✗ Configuration error: {str(ve)}")
+                update_session_status(
+                    session_id, 
+                    'ERROR', 
+                    stage='Configuration error',
+                    error_message=str(ve)
+                )
+                
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps({
+                        'error': 'Configuration error',
+                        'details': str(ve)
+                    })
+                }
+                
+            except Exception as e:
+                print(f"[SESSION] ✗ Agent workflow failed: {str(e)}")
+                import traceback
+                print(f"[SESSION] Traceback: {traceback.format_exc()}")
+                
+                update_session_status(
+                    session_id,
+                    'ERROR',
+                    stage='Agent workflow error',
+                    error_message=str(e)
+                )
+                
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps({
+                        'error': 'Agent workflow failed',
+                        'details': str(e)
+                    })
+                }
+        
+        # Handle API Gateway HTTP requests
+        http_method = event.get('httpMethod')
+        path = event.get('path', '')
         
         # Handle preflight OPTIONS requests
         if http_method == 'OPTIONS':
@@ -374,6 +569,7 @@ def handler(event, context):
                     'error': 'Missing required fields: client_name and requirements'
                 })
             
+            # Create session immediately
             session_id = create_session(
                 client_name=body['client_name'],
                 project_name=body.get('project_name', ''),
@@ -387,102 +583,32 @@ def handler(event, context):
             print(f"[SESSION] Client: {body['client_name']}")
             print(f"[SESSION] Requirements length: {len(body['requirements'])} characters")
             
+            # Invoke agent workflow asynchronously
             try:
-                print(f"[SESSION] Invoking Bedrock Agent for session: {session_id}")
-                
-                agent_response = invoke_bedrock_agent(
-                    session_id, 
-                    body['client_name'], 
-                    body.get('project_name', ''), 
-                    body.get('industry', ''), 
-                    body['requirements'], 
-                    body.get('duration', ''), 
+                invoke_agent_async(
+                    session_id,
+                    body['client_name'],
+                    body.get('project_name', ''),
+                    body.get('industry', ''),
+                    body['requirements'],
+                    body.get('duration', ''),
                     body.get('team_size', 1)
                 )
                 
-                print(f"[SESSION] ✓ Bedrock Agent invocation completed")
-                print(f"[SESSION] Response status: {agent_response.get('status')}")
-                print(f"[SESSION] Tool calls made: {agent_response.get('action_group_invocations', 0)}")
-                print(f"[SESSION] Response chunks: {agent_response.get('chunks_received', 0)}")
-                
-                # Update status based on agent response
-                dynamodb = boto3.client('dynamodb')
-                
-                if agent_response.get('status') == 'completed':
-                    status_value = 'AGENT_PROCESSING'
-                elif agent_response.get('status') == 'awaiting_input':
-                    status_value = 'AWAITING_INPUT'
-                else:
-                    status_value = 'AGENT_PROCESSING'
-                
-                dynamodb.update_item(
-                    TableName=os.environ['SESSIONS_TABLE_NAME'],
-                    Key={'session_id': {'S': session_id}},
-                    UpdateExpression='SET #status = :status, agent_response = :ar, updated_at = :ua',
-                    ExpressionAttributeNames={'#status': 'status'},
-                    ExpressionAttributeValues={
-                        ':status': {'S': status_value},
-                        ':ar': {'S': json.dumps({
-                            'response': agent_response.get('response', ''),
-                            'tool_calls': agent_response.get('tool_calls', []),
-                            'action_group_invocations': agent_response.get('action_group_invocations', 0)
-                        }, cls=DateTimeEncoder)},
-                        ':ua': {'S': datetime.utcnow().isoformat()}
-                    }
-                )
-                
+                # Return immediately with session ID and pending status
                 return create_cors_response(200, {
                     'session_id': session_id,
-                    'message': 'Assessment started with Bedrock Agent',
-                    'status': agent_response.get('status'),
-                    'tool_calls': agent_response.get('action_group_invocations', 0)
-                })
-                
-            except ValueError as ve:
-                print(f"[SESSION] ✗ Configuration error: {str(ve)}")
-                
-                # Update session with configuration error
-                dynamodb = boto3.client('dynamodb')
-                dynamodb.update_item(
-                    TableName=os.environ['SESSIONS_TABLE_NAME'],
-                    Key={'session_id': {'S': session_id}},
-                    UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                    ExpressionAttributeNames={'#status': 'status'},
-                    ExpressionAttributeValues={
-                        ':status': {'S': 'CONFIGURATION_ERROR'},
-                        ':error': {'S': str(ve)},
-                        ':ua': {'S': datetime.utcnow().isoformat()}
-                    }
-                )
-                
-                return create_cors_response(500, {
-                    'session_id': session_id,
-                    'error': 'Agent configuration error. Please run setup script.',
-                    'details': str(ve)
+                    'status': 'PENDING',
+                    'message': 'Assessment request received. Processing in background.',
+                    'poll_url': f'/api/agent-status/{session_id}'
                 })
                 
             except Exception as e:
-                print(f"[SESSION] ✗ Bedrock Agent invocation failed: {str(e)}")
-                import traceback
-                print(f"[SESSION] Traceback: {traceback.format_exc()}")
-                
-                # Update session with error
-                dynamodb = boto3.client('dynamodb')
-                dynamodb.update_item(
-                    TableName=os.environ['SESSIONS_TABLE_NAME'],
-                    Key={'session_id': {'S': session_id}},
-                    UpdateExpression='SET #status = :status, error_message = :error, updated_at = :ua',
-                    ExpressionAttributeNames={'#status': 'status'},
-                    ExpressionAttributeValues={
-                        ':status': {'S': 'ERROR'},
-                        ':error': {'S': f'Bedrock Agent invocation failed: {str(e)}'},
-                        ':ua': {'S': datetime.utcnow().isoformat()}
-                    }
-                )
-                
+                print(f"[SESSION] ✗ Failed to start async workflow: {str(e)}")
                 return create_cors_response(500, {
                     'session_id': session_id,
-                    'error': str(e)
+                    'error': 'Failed to start workflow',
+                    'details': str(e)
                 })
         
         elif http_method == 'GET' and '/api/agent-status/' in path:
@@ -539,6 +665,8 @@ def handler(event, context):
         
     except Exception as e:
         print(f"[SESSION] ✗ Unexpected error: {str(e)}")
+        import traceback
+        print(f"[SESSION] Traceback: {traceback.format_exc()}")
         return create_cors_response(500, {
             'error': str(e)
         })

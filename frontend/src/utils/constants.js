@@ -3,13 +3,22 @@ export const MAX_POLLING_TIME = 300000 // 5 minutes timeout
 
 export const WORKFLOW_STAGES = [
   { id: 1, name: 'Session Created', key: 'session_created', icon: '✓' },
-  { id: 2, name: 'Analyzing Requirements', key: 'requirements_analysis', icon: '⏳' },
-  { id: 3, name: 'Calculating Costs', key: 'cost_calculation', icon: '⏳' },
-  { id: 4, name: 'Selecting Templates', key: 'template_selection', icon: '⏳' },
-  { id: 5, name: 'Generating PowerPoint', key: 'powerpoint_generation', icon: '⏳' },
-  { id: 6, name: 'Generating SOW', key: 'sow_generation', icon: '⏳' },
+  { id: 2, name: 'Analyzing Requirements', key: 'RequirementsAnalyzer', icon: '⏳' },
+  { id: 3, name: 'Calculating Costs', key: 'CostCalculator', icon: '⏳' },
+  { id: 4, name: 'Selecting Templates', key: 'TemplateRetriever', icon: '⏳' },
+  { id: 5, name: 'Generating PowerPoint', key: 'PowerPointGenerator', icon: '⏳' },
+  { id: 6, name: 'Generating SOW', key: 'SOWGenerator', icon: '⏳' },
   { id: 7, name: 'Complete', key: 'completed', icon: '✅' }
 ]
+
+// Status constants - synchronized with backend Lambda status values
+export const STATUS = {
+  PENDING: 'PENDING',
+  PROCESSING: 'PROCESSING',
+  COMPLETED: 'COMPLETED',
+  ERROR: 'ERROR',
+  CONFIGURATION_ERROR: 'CONFIGURATION_ERROR'
+}
 
 export const INDUSTRIES = [
   'Technology',

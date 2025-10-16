@@ -253,8 +253,8 @@ let currentStepIndex = 0
 
 const formattedStatus = computed(() => {
   const statusMap = {
-    'INITIATED': 'Starting',
-    'AGENT_PROCESSING': 'Processing',
+    'PENDING': 'Starting',
+    'PROCESSING': 'Processing',
     'COMPLETED': 'Completed',
     'ERROR': 'Failed',
     'CONFIGURATION_ERROR': 'Configuration Error'
@@ -264,8 +264,8 @@ const formattedStatus = computed(() => {
 
 const statusBadgeClass = computed(() => {
   const classMap = {
-    'INITIATED': 'badge-processing',
-    'AGENT_PROCESSING': 'badge-processing',
+    'PENDING': 'badge-processing',
+    'PROCESSING': 'badge-processing',
     'COMPLETED': 'badge-success',
     'ERROR': 'badge-error',
     'CONFIGURATION_ERROR': 'badge-error'

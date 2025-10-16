@@ -59,7 +59,8 @@ class ApiStack(Stack):
             "POST",
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
-                proxy=True
+                proxy=True,
+                timeout=apigateway.Duration.seconds(29)  # API Gateway max timeout, Lambda returns quickly
             ),
             api_key_required=False
         )
@@ -70,7 +71,8 @@ class ApiStack(Stack):
             "GET",
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
-                proxy=True
+                proxy=True,
+                timeout=apigateway.Duration.seconds(29)  # Fast polling endpoint
             ),
             api_key_required=False
         )
@@ -81,7 +83,8 @@ class ApiStack(Stack):
             "GET",
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
-                proxy=True
+                proxy=True,
+                timeout=apigateway.Duration.seconds(29)
             ),
             api_key_required=False
         )
