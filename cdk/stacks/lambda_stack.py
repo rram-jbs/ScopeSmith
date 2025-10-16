@@ -234,7 +234,8 @@ class LambdaStack(Stack):
                 action="lambda:InvokeFunction"
             )
 
-        # Create CloudWatch alarms for all functions
+        # Create CloudWatch alarms for all functions AFTER all permissions are set
+        # This prevents circular dependencies between Lambda, Role Policy, and Alarms
         for func, name in [
             (self.requirements_analyzer, "RequirementsAnalyzer"),
             (self.cost_calculator, "CostCalculator"),
@@ -243,7 +244,16 @@ class LambdaStack(Stack):
             (self.sow_generator, "SOWGenerator"),
             (self.session_manager, "SessionManager")
         ]:
-            create_error_alarm(func, name)
+            alarm = cloudwatch.Alarm(
+                self, f"{name}ErrorAlarm",
+                metric=func.metric_errors(
+                    period=Duration.minutes(5)
+                ),
+                threshold=3,
+                evaluation_periods=1
+            )
+            # Add alarm action after alarm creation to avoid circular dependency
+            alarm.add_alarm_action(cloudwatch_actions.SnsAction(alarm_topic))
 
         # CloudFormation outputs
         for func, name in [
