@@ -193,7 +193,7 @@
 
           <!-- Branding Footer -->
           <div class="results-footer">
-            <img src="/logo.png" alt="ScopeSmith" class="footer-logo" />
+            <img src="/logo.svg" alt="ScopeSmith" class="footer-logo" />
             <p class="footer-text">Powered by Amazon Bedrock Agents</p>
           </div>
 

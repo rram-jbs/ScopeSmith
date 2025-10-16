@@ -162,7 +162,7 @@
             <h3 class="completion-title">Proposal Ready</h3>
             <p class="completion-subtitle">{{ orchestrationSummary }}</p>
             <div class="completion-logo">
-              <img src="/logo.png" alt="ScopeSmith" />
+              <img src="/logo.svg" alt="ScopeSmith" />
             </div>
           </div>
 

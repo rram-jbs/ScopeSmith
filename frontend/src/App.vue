@@ -3,8 +3,9 @@
     <header class="app-header">
       <div class="header-content">
         <div class="logo-container">
-          <img src="/logo.png" alt="ScopeSmith" class="logo" />
-          <h1>ScopeSmith</h1>
+          <router-link to="/" class="logo-link" aria-label="Go to home page">
+            <img src="/logo.svg" alt="ScopeSmith" class="logo" />
+          </router-link>
         </div>
         <div class="session-status" v-if="sessionStatus">
           <div class="status-indicator" :class="statusClass"></div>
@@ -187,25 +188,34 @@ body {
   min-width: 0;
 }
 
+.logo-link {
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: opacity var(--transition-fast);
+}
+
+.logo-link:focus-visible {
+  outline: 2px solid var(--color-blue);
+  outline-offset: 2px;
+}
+
 .logo {
-  height: 36px; /* Increased from 44px for better visibility without padding */
+  height: 40px;
   width: auto;
-  /* Remove padding - it was making the logo appear smaller */
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
-  transition: transform var(--transition-fast);
+  transition: transform var(--transition-fast), filter var(--transition-fast);
 }
 
-.logo:hover {
+.logo-link:hover .logo {
   transform: scale(1.02);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.16));
 }
 
-.logo-container h1 {
-  font-size: 20px;
-  font-weight: 600;
-  letter-spacing: -0.4px;
-  color: var(--color-label);
-  white-space: nowrap;
+.logo-link:active .logo {
+  transform: scale(0.98);
 }
 
 .session-status {
@@ -287,11 +297,7 @@ body {
   }
   
   .logo {
-    height: 28px; /* Smaller on mobile */
-  }
-  
-  .logo-container h1 {
-    font-size: 17px;
+    height: 32px;
   }
   
   .session-status {
@@ -301,8 +307,8 @@ body {
 }
 
 @media (max-width: 480px) {
-  .logo-container h1 {
-    display: none; /* Hide text on very small screens */
+  .logo {
+    height: 28px;
   }
 }
 </style>
