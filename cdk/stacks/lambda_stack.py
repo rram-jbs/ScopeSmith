@@ -159,13 +159,13 @@ class LambdaStack(Stack):
             infra_stack.templates_bucket.grant_read(func)
             infra_stack.artifacts_bucket.grant_read_write(func)
 
-        # Grant session manager permission to invoke itself asynchronously
+        # Grant session manager permission to invoke itself asynchronously (using wildcard to avoid circular dependency)
         self.session_manager.add_to_role_policy(iam.PolicyStatement(
             actions=[
                 "lambda:InvokeFunction",
                 "lambda:InvokeAsync"
             ],
-            resources=[self.session_manager.function_arn]
+            resources=[f"arn:aws:lambda:{self.region}:{self.account}:function:*SessionManager*"]
         ))
 
         # Grant session manager AgentCore Runtime permissions
