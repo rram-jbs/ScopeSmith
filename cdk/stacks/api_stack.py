@@ -3,6 +3,7 @@ from typing import Any
 from aws_cdk import (
     Stack,
     CfnOutput,
+    Duration,
     aws_apigateway as apigateway,
     aws_iam as iam,
 )
@@ -60,7 +61,7 @@ class ApiStack(Stack):
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
                 proxy=True,
-                timeout=apigateway.Duration.seconds(29)  # API Gateway max timeout, Lambda returns quickly
+                timeout=Duration.seconds(29)  # API Gateway max timeout, Lambda returns quickly
             ),
             api_key_required=False
         )
@@ -72,7 +73,7 @@ class ApiStack(Stack):
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
                 proxy=True,
-                timeout=apigateway.Duration.seconds(29)  # Fast polling endpoint
+                timeout=Duration.seconds(29)  # Fast polling endpoint
             ),
             api_key_required=False
         )
@@ -84,7 +85,7 @@ class ApiStack(Stack):
             apigateway.LambdaIntegration(
                 lambda_stack.session_manager,
                 proxy=True,
-                timeout=apigateway.Duration.seconds(29)
+                timeout=Duration.seconds(29)
             ),
             api_key_required=False
         )
