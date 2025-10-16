@@ -188,32 +188,33 @@ def select_best_templates(templates, requirements_data, cost_data):
     """Select the most appropriate templates based on project characteristics"""
     selected = {}
     
-    # Simple template selection logic - in a real implementation, this would be more sophisticated
-    complexity = requirements_data.get('complexity_level', 'Medium')
-    total_cost = cost_data.get('total_cost', 50000)
+    print(f"[TEMPLATE RETRIEVER] Available templates: {json.dumps(templates)}")
     
-    # Select SOW template
-    if 'sow' in templates and templates['sow']:
-        # For now, select the first available template
-        # In practice, you'd match based on complexity, cost, industry, etc.
-        if complexity == 'High' or total_cost > 100000:
-            # Try to find enterprise template
-            enterprise_template = next((t for t in templates['sow'] if 'enterprise' in t['name'].lower()), None)
-            selected['sow'] = enterprise_template or templates['sow'][0]
-        else:
-            # Use standard template
-            standard_template = next((t for t in templates['sow'] if 'standard' in t['name'].lower()), None)
-            selected['sow'] = standard_template or templates['sow'][0]
+    # Simple template selection - just pick the first available template
+    # Return the template data in a format the generators expect
+    if 'sow' in templates and templates['sow'] and len(templates['sow']) > 0:
+        template = templates['sow'][0]
+        selected['sow'] = {
+            'template_path': template['key'],  # S3 key that generators can use
+            'template_name': template['name'],
+            'template_metadata': {
+                'size': template['size'],
+                'last_modified': template['last_modified']
+            }
+        }
+        print(f"[TEMPLATE RETRIEVER] Selected SOW template: {selected['sow']}")
     
-    # Select PowerPoint template
-    if 'powerpoint' in templates and templates['powerpoint']:
-        if complexity == 'High' or total_cost > 100000:
-            # Try to find detailed template
-            detailed_template = next((t for t in templates['powerpoint'] if 'detailed' in t['name'].lower()), None)
-            selected['powerpoint'] = detailed_template or templates['powerpoint'][0]
-        else:
-            # Use standard template
-            standard_template = next((t for t in templates['powerpoint'] if 'standard' in t['name'].lower()), None)
-            selected['powerpoint'] = standard_template or templates['powerpoint'][0]
+    if 'powerpoint' in templates and templates['powerpoint'] and len(templates['powerpoint']) > 0:
+        template = templates['powerpoint'][0]
+        selected['powerpoint'] = {
+            'template_path': template['key'],  # S3 key that generators can use
+            'template_name': template['name'],
+            'template_metadata': {
+                'size': template['size'],
+                'last_modified': template['last_modified']
+            }
+        }
+        print(f"[TEMPLATE RETRIEVER] Selected PowerPoint template: {selected['powerpoint']}")
     
+    print(f"[TEMPLATE RETRIEVER] Final selected templates: {json.dumps(selected)}")
     return selected
