@@ -291,11 +291,11 @@ const getStepClass = (index) => {
 const updateWorkflowProgress = () => {
   // Map action group names to workflow steps - synchronized with Lambda function names
   const stageToStepMap = {
-    'RequirementsAnalyzer': 1,  // Match actual Lambda function name
-    'CostCalculator': 2,         // Match actual Lambda function name
-    'TemplateRetriever': 3,      // Match actual Lambda function name
-    'PowerPointGenerator': 4,    // Match actual Lambda function name
-    'SOWGenerator': 5            // Match actual Lambda function name
+    'RequirementsAnalyzer': 1,  // Match actual Lambda action group name
+    'CostCalculator': 2,         // Match actual Lambda action group name
+    'TemplateRetriever': 3,      // Match actual Lambda action group name
+    'PowerPointGenerator': 4,    // Match actual Lambda action group name
+    'SOWGenerator': 5            // Match actual Lambda action group name
   }
 
   // Mark initiate as completed when first event arrives
@@ -304,34 +304,40 @@ const updateWorkflowProgress = () => {
     currentStepIndex = 0
   }
 
-  // Update based on tool calls - match with actual action group names from Lambda
-  events.value.forEach(event => {
+  // Track which action groups have been called and completed
+  const calledActionGroups = new Set()
+  const completedActionGroups = new Set()
+  
+  // First pass: identify all tool calls and their completion status
+  for (let i = 0; i < events.value.length; i++) {
+    const event = events.value[i]
+    
     if (event.type === 'tool_call' && event.action_group) {
-      const stepIndex = stageToStepMap[event.action_group]
-      if (stepIndex !== undefined) {
-        // Mark this step as active
-        if (workflowSteps.value[stepIndex].status === 'pending') {
-          workflowSteps.value[stepIndex].status = 'active'
-          currentStepIndex = stepIndex
+      calledActionGroups.add(event.action_group)
+      
+      // Check if there's a corresponding tool_response after this call
+      for (let j = i + 1; j < events.value.length; j++) {
+        if (events.value[j].type === 'tool_response') {
+          completedActionGroups.add(event.action_group)
+          break
+        }
+        // If we hit another tool_call, stop looking
+        if (events.value[j].type === 'tool_call') {
+          break
         }
       }
     }
-    
-    // Mark step as completed when we receive the response
-    if (event.type === 'tool_response') {
-      // Find the most recent tool_call to determine which step completed
-      const recentToolCalls = events.value.filter(e => e.type === 'tool_call').reverse()
-      if (recentToolCalls.length > 0) {
-        const lastCall = recentToolCalls[0]
-        const stepIndex = stageToStepMap[lastCall.action_group]
-        if (stepIndex !== undefined && workflowSteps.value[stepIndex].status === 'active') {
-          workflowSteps.value[stepIndex].status = 'completed'
-          // Mark next step as active if available
-          if (stepIndex + 1 < workflowSteps.value.length - 1) {
-            workflowSteps.value[stepIndex + 1].status = 'pending'
-          }
-        }
-      }
+  }
+
+  // Update workflow steps based on action groups
+  Object.entries(stageToStepMap).forEach(([actionGroup, stepIndex]) => {
+    if (completedActionGroups.has(actionGroup)) {
+      // Mark as completed if we have a response
+      workflowSteps.value[stepIndex].status = 'completed'
+    } else if (calledActionGroups.has(actionGroup)) {
+      // Mark as active if called but not completed
+      workflowSteps.value[stepIndex].status = 'active'
+      currentStepIndex = stepIndex
     }
   })
 

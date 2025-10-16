@@ -4,9 +4,6 @@
     <!-- Form View (Compact State) -->
     <div v-if="currentView === 'form'" class="form-view">
       <div class="welcome-section">
-        <div class="logo-hero">
-          <img src="/logo.png" alt="ScopeSmith" class="hero-logo" />
-        </div>
         <h1 class="hero-title">Generate Professional Proposals</h1>
         <p class="hero-subtitle">AI-powered proposal generation using Amazon Bedrock Agents</p>
       </div>
@@ -31,12 +28,12 @@
                 v-model="formData.requirements"
                 @focus="requirementsFocused = true"
                 @blur="requirementsFocused = false"
-                placeholder="Example:&#10;&#10;Client: TechCorp Inc&#10;Project: Modernize inventory system&#10;&#10;Requirements:&#10;• Microservices architecture&#10;• Real-time inventory tracking&#10;• Mobile app for warehouse staff&#10;• ERP system integration&#10;• Support 10,000+ concurrent users&#10;&#10;Timeline: 9-12 months&#10;Budget: Flexible"
+                placeholder="Example:&#10;&#10;Project: Modernize inventory management system&#10;&#10;Requirements:&#10;• Microservices architecture&#10;• Real-time inventory tracking&#10;• Mobile app for warehouse staff&#10;• Integration with existing ERP system&#10;• Support for 10,000+ concurrent users&#10;• Cloud-based deployment (AWS)&#10;&#10;Timeline: 9-12 months&#10;Budget: $500K - $750K"
                 required
               ></textarea>
               <div class="textarea-hint">
                 <span class="hint-icon">💡</span>
-                <span>Include client name, project details, requirements, timeline, and budget</span>
+                <span>Include project details, technical requirements, timeline, and budget constraints</span>
               </div>
             </div>
           </div>
@@ -44,60 +41,27 @@
           <!-- Optional Fields -->
           <div class="form-row">
             <div class="form-section">
-              <label for="clientName" class="form-label">Client Name <span class="optional">(Optional)</span></label>
+              <label for="clientName" class="form-label">Client Name</label>
               <input
                 type="text"
                 id="clientName"
                 v-model="formData.client_name"
                 class="form-input"
                 placeholder="e.g., TechCorp Inc"
+                required
               />
             </div>
 
             <div class="form-section">
-              <label for="projectName" class="form-label">Project Name <span class="optional">(Optional)</span></label>
+              <label for="projectName" class="form-label">Project Name</label>
               <input
                 type="text"
                 id="projectName"
                 v-model="formData.project_name"
                 class="form-input"
                 placeholder="e.g., Inventory System Modernization"
+                required
               />
-            </div>
-          </div>
-
-          <div class="form-row">
-            <div class="form-section">
-              <label for="industry" class="form-label">Industry <span class="optional">(Optional)</span></label>
-              <select
-                id="industry"
-                v-model="formData.industry"
-                class="form-select"
-              >
-                <option value="">Auto-detect from notes</option>
-                <option value="retail">Retail</option>
-                <option value="healthcare">Healthcare</option>
-                <option value="finance">Finance</option>
-                <option value="manufacturing">Manufacturing</option>
-                <option value="technology">Technology</option>
-                <option value="education">Education</option>
-                <option value="government">Government</option>
-              </select>
-            </div>
-
-            <div class="form-section">
-              <label for="duration" class="form-label">Duration <span class="optional">(Optional)</span></label>
-              <select
-                id="duration"
-                v-model="formData.duration"
-                class="form-select"
-              >
-                <option value="">Auto-detect from notes</option>
-                <option value="1-3 months">1-3 months</option>
-                <option value="3-6 months">3-6 months</option>
-                <option value="6-12 months">6-12 months</option>
-                <option value="12+ months">12+ months</option>
-              </select>
             </div>
           </div>
 
@@ -106,12 +70,9 @@
             type="submit" 
             class="generate-button"
             :class="{ loading: isSubmitting }"
-            :disabled="isSubmitting || !formData.requirements"
+            :disabled="isSubmitting || !formData.requirements || !formData.client_name || !formData.project_name"
           >
             <span v-if="!isSubmitting" class="button-content">
-              <svg class="button-icon" width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M10 3v14M17 10H3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-              </svg>
               Generate Proposal
             </span>
             <span v-else class="button-content">
@@ -119,14 +80,6 @@
               Creating Session...
             </span>
           </button>
-
-          <div class="time-estimate">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-              <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5"/>
-              <path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-            </svg>
-            <span>Estimated time: &lt; 3 minutes</span>
-          </div>
 
         </form>
 
@@ -226,14 +179,6 @@
               </a>
             </div>
 
-          </div>
-
-          <!-- Cost Summary (if available) -->
-          <div v-if="documents.cost_data && Object.keys(documents.cost_data).length > 0" class="cost-summary">
-            <h3 class="summary-title">Cost Summary</h3>
-            <div class="summary-content">
-              <pre class="cost-json">{{ JSON.stringify(documents.cost_data, null, 2) }}</pre>
-            </div>
           </div>
 
           <!-- Action Buttons -->
@@ -912,41 +857,6 @@ const startNew = () => {
 
 .download-icon {
   color: currentColor;
-}
-
-.cost-summary {
-  background: var(--glass-background);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border-radius: var(--radius-lg);
-  border: 0.5px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  padding: var(--spacing-xl);
-  margin-bottom: var(--spacing-xl);
-  animation: slideUp 0.6s ease-out 0.3s both;
-}
-
-.summary-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--color-label);
-  margin-bottom: var(--spacing-md);
-}
-
-.summary-content {
-  background: var(--color-secondary-background);
-  border-radius: var(--radius-sm);
-  padding: var(--spacing-md);
-  overflow-x: auto;
-}
-
-.cost-json {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--color-label);
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .results-actions {

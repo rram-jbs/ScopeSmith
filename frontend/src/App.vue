@@ -188,9 +188,9 @@ body {
 }
 
 .logo {
-  height: 44px; /* @2x retina */
+  height: 36px; /* Increased from 44px for better visibility without padding */
   width: auto;
-  padding: 11px; /* Minimum clear space = 1/4 logo height */
+  /* Remove padding - it was making the logo appear smaller */
   object-fit: contain;
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
   transition: transform var(--transition-fast);
@@ -287,8 +287,7 @@ body {
   }
   
   .logo {
-    height: 32px; /* Smaller on mobile */
-    padding: 8px;
+    height: 28px; /* Smaller on mobile */
   }
   
   .logo-container h1 {
