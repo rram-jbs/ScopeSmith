@@ -6,26 +6,119 @@
           <img src="/logo.png" alt="ScopeSmith" class="logo" />
           <h1>ScopeSmith</h1>
         </div>
-        <nav class="main-nav">
-          <router-link to="/" class="nav-link">Home</router-link>
-          <router-link to="/projects" class="nav-link">Projects</router-link>
-        </nav>
+        <div class="session-status" v-if="sessionStatus">
+          <div class="status-indicator" :class="statusClass"></div>
+          <span class="status-text">{{ sessionStatus }}</span>
+        </div>
+        <div class="user-controls">
+          <button class="icon-button" aria-label="Settings">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path d="M10 12.5a2.5 2.5 0 100-5 2.5 2.5 0 000 5z" stroke="currentColor" stroke-width="1.5"/>
+              <path d="M16.5 10a6.5 6.5 0 11-13 0 6.5 6.5 0 0113 0z" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </button>
+        </div>
       </div>
     </header>
     <main class="app-main">
-      <router-view />
+      <router-view v-slot="{ Component }">
+        <transition name="fade" mode="out-in">
+          <component :is="Component" @status-update="updateStatus" />
+        </transition>
+      </router-view>
     </main>
-    <footer class="app-footer">
-      <p>Powered by Amazon Nova Pro</p>
-    </footer>
   </div>
 </template>
 
 <script setup>
-// App wrapper - just renders the router view
+import { ref } from 'vue'
+
+const sessionStatus = ref(null)
+const statusClass = ref('status-idle')
+
+const updateStatus = (status) => {
+  sessionStatus.value = status
+  
+  if (status?.includes('Completed') || status?.includes('Ready')) {
+    statusClass.value = 'status-success'
+  } else if (status?.includes('Error')) {
+    statusClass.value = 'status-error'
+  } else if (status) {
+    statusClass.value = 'status-active'
+  } else {
+    statusClass.value = 'status-idle'
+  }
+}
 </script>
 
-<style scoped>
+<style>
+/* Apple Design System - Global Styles */
+:root {
+  /* SF Pro Font Stack */
+  --font-system: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', 'Helvetica Neue', sans-serif;
+  --font-mono: 'SF Mono', 'Monaco', 'Cascadia Code', 'Courier New', monospace;
+  
+  /* Apple System Colors */
+  --color-blue: #007AFF;
+  --color-green: #34C759;
+  --color-red: #FF3B30;
+  --color-orange: #FF9500;
+  --color-yellow: #FFCC00;
+  --color-purple: #AF52DE;
+  
+  /* Neutral Colors */
+  --color-label: rgba(0, 0, 0, 0.85);
+  --color-secondary-label: rgba(0, 0, 0, 0.55);
+  --color-tertiary-label: rgba(0, 0, 0, 0.30);
+  --color-separator: rgba(0, 0, 0, 0.10);
+  
+  /* Background Colors */
+  --color-background: #FFFFFF;
+  --color-secondary-background: #F2F2F7;
+  --color-tertiary-background: #FFFFFF;
+  
+  /* Liquid Glass Material */
+  --glass-background: rgba(255, 255, 255, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.18);
+  --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.08);
+  
+  /* Spacing Scale (Apple's 8pt grid) */
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-2xl: 48px;
+  
+  /* Border Radius */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  
+  /* Transitions */
+  --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-base: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-label: rgba(255, 255, 255, 0.85);
+    --color-secondary-label: rgba(255, 255, 255, 0.55);
+    --color-tertiary-label: rgba(255, 255, 255, 0.30);
+    --color-separator: rgba(255, 255, 255, 0.10);
+    
+    --color-background: #000000;
+    --color-secondary-background: #1C1C1E;
+    --color-tertiary-background: #2C2C2E;
+    
+    --glass-background: rgba(28, 28, 30, 0.72);
+    --glass-border: rgba(255, 255, 255, 0.12);
+    --glass-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -33,80 +126,184 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-family: var(--font-system);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--color-secondary-background);
+  color: var(--color-label);
 }
 
 #app {
   width: 100%;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
+.app-main {
+  flex: 1;
+}
+
+/* Fade Transition */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity var(--transition-base);
+}
+
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>
+
+<style scoped>
+/* Apple-Inspired Navigation Bar with Liquid Glass */
 .app-header {
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  color: white;
-  padding: 1.5rem 2rem;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  background: var(--glass-background);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
 }
 
 .header-content {
   max-width: 1200px;
   margin: 0 auto;
+  padding: var(--spacing-sm) var(--spacing-lg);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: var(--spacing-lg);
+  height: 52px; /* Apple standard nav height */
 }
 
 .logo-container {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: var(--spacing-md);
+  min-width: 0;
 }
 
 .logo {
-  height: 40px;
+  height: 44px; /* @2x retina */
   width: auto;
-  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+  padding: 11px; /* Minimum clear space = 1/4 logo height */
+  object-fit: contain;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.12));
+  transition: transform var(--transition-fast);
+}
+
+.logo:hover {
+  transform: scale(1.02);
 }
 
 .logo-container h1 {
-  margin: 0;
-  font-size: 1.75rem;
-  font-weight: 700;
-  letter-spacing: -0.5px;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+  color: var(--color-label);
+  white-space: nowrap;
 }
 
-.main-nav {
+.session-status {
   display: flex;
-  gap: 1.5rem;
-}
-
-.nav-link {
-  color: white;
-  text-decoration: none;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 6px 12px;
+  background: var(--color-tertiary-background);
+  border-radius: 100px;
+  font-size: 13px;
   font-weight: 500;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  transition: background-color 0.2s;
+  color: var(--color-secondary-label);
 }
 
-.nav-link:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+.status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: background-color var(--transition-base);
 }
 
-.nav-link.router-link-active {
-  background-color: rgba(255, 255, 255, 0.2);
+.status-indicator.status-idle {
+  background: var(--color-separator);
 }
 
-.app-footer {
-  background: #2d3748;
-  color: #a0aec0;
-  text-align: center;
-  padding: 1.5rem;
-  margin-top: auto;
+.status-indicator.status-active {
+  background: var(--color-blue);
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
-.app-footer p {
-  margin: 0;
-  font-size: 0.875rem;
+.status-indicator.status-success {
+  background: var(--color-green);
+}
+
+.status-indicator.status-error {
+  background: var(--color-red);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.user-controls {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.icon-button {
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--color-label);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+
+.icon-button:hover {
+  background: var(--color-separator);
+}
+
+.icon-button:active {
+  transform: scale(0.96);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .header-content {
+    padding: var(--spacing-sm) var(--spacing-md);
+  }
+  
+  .logo {
+    height: 32px; /* Smaller on mobile */
+    padding: 8px;
+  }
+  
+  .logo-container h1 {
+    font-size: 17px;
+  }
+  
+  .session-status {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+}
+
+@media (max-width: 480px) {
+  .logo-container h1 {
+    display: none; /* Hide text on very small screens */
+  }
 }
 </style>

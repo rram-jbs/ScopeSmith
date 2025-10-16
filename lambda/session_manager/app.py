@@ -6,6 +6,13 @@ import time
 from datetime import datetime
 from botocore.exceptions import ClientError
 
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects"""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super(DateTimeEncoder, self).default(obj)
+
 def create_session(client_name, project_name, industry, requirements, duration, team_size):
     session_id = str(uuid.uuid4())
     timestamp = datetime.utcnow().isoformat()
@@ -175,7 +182,7 @@ Work autonomously through all steps and provide me with the final document URLs.
                                 Key={'session_id': {'S': session_id}},
                                 UpdateExpression='SET agent_events = :events, updated_at = :ua',
                                 ExpressionAttributeValues={
-                                    ':events': {'S': json.dumps(agent_events)},
+                                    ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
                                     ':ua': {'S': datetime.utcnow().isoformat()}
                                 }
                             )
@@ -219,7 +226,7 @@ Work autonomously through all steps and provide me with the final document URLs.
                                     Key={'session_id': {'S': session_id}},
                                     UpdateExpression='SET agent_events = :events, current_stage = :stage, updated_at = :ua',
                                     ExpressionAttributeValues={
-                                        ':events': {'S': json.dumps(agent_events)},
+                                        ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
                                         ':stage': {'S': action_group_name},
                                         ':ua': {'S': datetime.utcnow().isoformat()}
                                     }
@@ -249,7 +256,7 @@ Work autonomously through all steps and provide me with the final document URLs.
                             agent_events.append({
                                 'type': 'final_response',
                                 'timestamp': datetime.utcnow().isoformat(),
-                                'content': json.dumps(final_resp)
+                                'content': json.dumps(final_resp, cls=DateTimeEncoder)
                             })
                     
                     if 'rationale' in orch_trace:
@@ -300,7 +307,7 @@ Work autonomously through all steps and provide me with the final document URLs.
                 ExpressionAttributeValues={
                     ':status': {'S': 'ERROR'},
                     ':error': {'S': str(stream_error)},
-                    ':events': {'S': json.dumps(agent_events)},
+                    ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
                     ':ua': {'S': datetime.utcnow().isoformat()}
                 }
             )
@@ -316,7 +323,7 @@ Work autonomously through all steps and provide me with the final document URLs.
             UpdateExpression='SET agent_events = :events, #status = :status, updated_at = :ua',
             ExpressionAttributeNames={'#status': 'status'},
             ExpressionAttributeValues={
-                ':events': {'S': json.dumps(agent_events)},
+                ':events': {'S': json.dumps(agent_events, cls=DateTimeEncoder)},
                 ':status': {'S': 'COMPLETED'},
                 ':ua': {'S': datetime.utcnow().isoformat()}
             }
@@ -346,7 +353,7 @@ def create_cors_response(status_code, body):
             'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
             'Content-Type': 'application/json'
         },
-        'body': json.dumps(body) if isinstance(body, dict) else body
+        'body': json.dumps(body, cls=DateTimeEncoder) if isinstance(body, dict) else body
     }
 
 def handler(event, context):
@@ -419,7 +426,7 @@ def handler(event, context):
                             'response': agent_response.get('response', ''),
                             'tool_calls': agent_response.get('tool_calls', []),
                             'action_group_invocations': agent_response.get('action_group_invocations', 0)
-                        })},
+                        }, cls=DateTimeEncoder)},
                         ':ua': {'S': datetime.utcnow().isoformat()}
                     }
                 )
